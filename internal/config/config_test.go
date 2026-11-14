@@ -13,7 +13,7 @@ func TestParseDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.MaxClients != 100 || cfg.LogLevel != "info" || cfg.SlogLevel() != slog.LevelInfo || cfg.GatewayID != 1 ||
-		cfg.AdvertiseInterval != 900 || cfg.AdvertiseAddress != "" {
+		cfg.AdvertiseInterval != 900 || cfg.AdvertiseAddress != "" || cfg.RetryInterval != 10 || cfg.RetryLimit != 5 {
 		t.Fatalf("defaults: %+v", cfg)
 	}
 }
@@ -50,6 +50,10 @@ func TestParseErrors(t *testing.T) {
 		"advertise addr port zero": {base + "advertise_address: 10.0.0.1:0\n", "advertise_address"},
 		"advertise addr no host":   {base + "advertise_address: \":5684\"\n", "advertise_address"},
 		"advertise addr garbage":   {base + "advertise_address: \"!!\"\n", "advertise_address"},
+		"retry interval zero":      {base + "retry_interval: 0\n", "retry_interval"},
+		"retry interval negative":  {base + "retry_interval: -1\n", "retry_interval"},
+		"retry limit zero":         {base + "retry_limit: 0\n", "retry_limit"},
+		"retry limit negative":     {base + "retry_limit: -1\n", "retry_limit"},
 	}
 	for name, tc := range cases {
 		_, err := Parse(strings.NewReader(tc.yaml))
@@ -86,5 +90,15 @@ func TestParseAdvertise(t *testing.T) {
 		if cfg.AdvertiseInterval != iv || cfg.AdvertiseAddress != "10.0.0.1:1234" {
 			t.Fatalf("interval %d parsed as %+v", iv, cfg)
 		}
+	}
+}
+
+func TestParseRetryExplicit(t *testing.T) {
+	cfg, err := Parse(strings.NewReader(base + "retry_interval: 3\nretry_limit: 7\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RetryInterval != 3 || cfg.RetryLimit != 7 {
+		t.Fatalf("retry parsed as %+v", cfg)
 	}
 }

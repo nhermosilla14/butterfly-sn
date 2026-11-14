@@ -23,6 +23,9 @@ type Config struct {
 
 	AdvertiseInterval int    `yaml:"advertise_interval"` // seconds between ADVERTISE, 0-65535; 0 disables
 	AdvertiseAddress  string `yaml:"advertise_address"`  // UDP host:port for ADVERTISE; empty means broadcast on the listen port
+
+	RetryInterval int `yaml:"retry_interval"` // seconds between broker reconnect attempts, must be greater than 0
+	RetryLimit    int `yaml:"retry_limit"`    // broker reconnect attempts before giving up, must be greater than 0
 }
 
 var logLevels = map[string]slog.Level{
@@ -44,7 +47,7 @@ func Load(path string) (Config, error) {
 
 // Parse reads and validates a YAML configuration. Absent keys take their defaults.
 func Parse(r io.Reader) (Config, error) {
-	cfg := Config{MaxClients: 100, LogLevel: "info", GatewayID: 1, AdvertiseInterval: 900}
+	cfg := Config{MaxClients: 100, LogLevel: "info", GatewayID: 1, AdvertiseInterval: 900, RetryInterval: 10, RetryLimit: 5}
 	dec := yaml.NewDecoder(r)
 	dec.KnownFields(true)
 	if err := dec.Decode(&cfg); err != nil && !errors.Is(err, io.EOF) {
@@ -70,6 +73,12 @@ func (c Config) validate() error {
 	}
 	if c.MaxClients <= 0 {
 		return fmt.Errorf("config: max_clients: must be greater than 0, got %d", c.MaxClients)
+	}
+	if c.RetryInterval <= 0 {
+		return fmt.Errorf("config: retry_interval: must be greater than 0, got %d", c.RetryInterval)
+	}
+	if c.RetryLimit <= 0 {
+		return fmt.Errorf("config: retry_limit: must be greater than 0, got %d", c.RetryLimit)
 	}
 	if _, ok := logLevels[c.LogLevel]; !ok {
 		return fmt.Errorf("config: log_level: must be one of debug, info, warn, error; got %q", c.LogLevel)

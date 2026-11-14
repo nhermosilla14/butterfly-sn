@@ -2,6 +2,7 @@
 
 - Intents: 20261114-broker-outage-inflight-cleanup
 - ADRs: 20261114-gateway-retry-and-pending-timeouts
+- Status: Done
 
 ## Scope
 The YAML file accepts `retry_interval` (seconds, default 10) and `retry_limit` (default 5). Non-positive values

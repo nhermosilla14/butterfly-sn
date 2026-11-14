@@ -22,3 +22,9 @@ gateway_id: 1
 
 # UDP address (host:port) ADVERTISE is sent to. Default: 255.255.255.255 on the listen port (broadcast).
 # advertise_address: 255.255.255.255:5684
+
+# Seconds between broker reconnect attempts. Default: 10. Must be greater than 0.
+# retry_interval: 10
+
+# Broker reconnect attempts before giving up. Default: 5. Must be greater than 0.
+# retry_limit: 5
