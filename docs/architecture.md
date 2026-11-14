@@ -66,6 +66,9 @@ keepalive, broker-loss handling, will handling, sleep with buffered downlink and
   gets a gateway REGISTER and the PUBLISH is held (at most 20 per session) until REGACK; a rejected
   registration forgets the name so a later publish registers it again with a fresh id. Downlink QoS 1 reuses
   the broker packet id as msg id and acknowledges the broker only after the client PUBACK.
+- A downlink message whose datagram exceeds one UDP datagram (65 507 bytes) is never recorded for retransmission:
+  it is dropped and logged with sizes, a QoS 1 one is acknowledged to the broker, and an oversize REGISTER also
+  forgets its topic name. The client is not disconnected for it.
 - The table holds at most 50 names per client, with monotonic ids that are not reused until the counter wraps.
   Short subscriptions live in a separate set, also capped at 50; a broker PUBLISH whose two-character topic is
   short-subscribed is sent as a short PUBLISH without REGISTER. Topic names that are empty or contain wildcards

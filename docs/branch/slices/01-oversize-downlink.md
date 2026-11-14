@@ -1,5 +1,6 @@
 # Oversize downlink is dropped
 
+- Status: Done
 - Intents: 20261114-conformance-defect-fixes
 
 ## Scope

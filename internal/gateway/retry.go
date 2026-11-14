@@ -28,10 +28,14 @@ type retryEntry struct {
 }
 
 // sendSupervised sends m to the client and records it in the retry set until its reply arrives. kind and id are
-// its type and msg id, and m must be a REGISTER or a QoS 1 PUBLISH.
-func (s *session) sendSupervised(kind string, id uint16, m mqttsn.Message) {
-	s.gw.sendTo(s.addr, m)
+// its type and msg id, and m must be a REGISTER or a QoS 1 PUBLISH. When m cannot be sent as one datagram it returns
+// an error wrapping errTooLarge and records nothing, so the caller drops it.
+func (s *session) sendSupervised(kind string, id uint16, m mqttsn.Message) error {
+	if err := s.gw.send(s.addr, m); err != nil {
+		return err
+	}
 	s.retries[retryKey{kind: kind, id: id}] = &retryEntry{msg: m, due: time.Now().Add(s.gw.retryInterval)}
+	return nil
 }
 
 // ackRetry removes the entry of a reply that arrived, and any parked copy of it. An id with no entry is ignored.
