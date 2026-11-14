@@ -22,6 +22,11 @@ type pendingReg struct {
 	topic   string
 	topicID uint16
 	held    []mqtt.Event
+	// fromSleep marks a REGISTER sent while flushing a buffer after a wake. Its held PUBLISH was already
+	// acknowledged to the broker, so it is never acknowledged again. See wake.go.
+	fromSleep bool
+	// seq is the creation order of the registration, so held PUBLISHes can be moved to the sleep buffer in order.
+	seq uint64
 }
 
 // nextRegMsgID returns the next gateway REGISTER msg id: 1..65535, never 0. An id still awaiting REGACK is
@@ -58,6 +63,10 @@ func (s *session) handleDownlink(broker *mqtt.Client, e mqtt.Event, log *slog.Lo
 		log.Warn("dropped downlink PUBLISH: packet id still awaiting client PUBACK", "packet_id", e.PacketID)
 		return nil
 	}
+	if e.QoS == 1 && s.preAckedBusy(e.PacketID) {
+		log.Warn("dropped downlink PUBLISH: packet id still awaiting client PUBACK of a buffered PUBLISH", "packet_id", e.PacketID)
+		return s.dropDownlink(broker, e)
+	}
 	if id, ok := shortID(e.Topic); ok {
 		if _, short := s.shortSubs[e.Topic]; short {
 			return s.sendDownlinkTo(broker, mqttsn.TopicIDShort, id, e, log)
@@ -85,7 +94,8 @@ func (s *session) handleDownlink(broker *mqtt.Client, e mqtt.Event, log *slog.Lo
 		return s.dropDownlink(broker, e)
 	}
 	msgID := s.nextRegMsgID()
-	s.pendingRegs[msgID] = &pendingReg{topic: e.Topic, topicID: id, held: []mqtt.Event{e}}
+	s.regSeq++
+	s.pendingRegs[msgID] = &pendingReg{topic: e.Topic, topicID: id, held: []mqtt.Event{e}, seq: s.regSeq}
 	s.regByTopic[e.Topic] = msgID
 	s.gw.sendTo(s.addr, mqttsn.Register{TopicID: id, MsgID: msgID, TopicName: e.Topic})
 	return nil
@@ -107,6 +117,10 @@ func (s *session) sendDownlinkTo(broker *mqtt.Client, topicIDType byte, topicID 
 	if s.downlinkAwaitingPuback(e.PacketID) {
 		log.Warn("dropped downlink PUBLISH: packet id still awaiting client PUBACK", "packet_id", e.PacketID)
 		return nil
+	}
+	if s.preAckedBusy(e.PacketID) {
+		log.Warn("dropped downlink PUBLISH: packet id still awaiting client PUBACK of a buffered PUBLISH", "packet_id", e.PacketID)
+		return s.dropDownlink(broker, e)
 	}
 	if len(s.pendingDownlink) >= maxPendingDownlink {
 		log.Warn("too many downlink PUBLISH awaiting client PUBACK, dropping")
@@ -143,7 +157,8 @@ func (s *session) pubackBroker(broker *mqtt.Client, id uint16) error {
 
 // handleRegack answers the gateway REGISTER with msg id m.MsgID. Accepted releases the held PUBLISHes for that
 // topic in arrival order. Rejected drops them, acknowledging QoS 1 ones to the broker, and removes the name from
-// the table. An unknown msg id is logged and ignored.
+// the table. Held PUBLISHes of a sleep-origin REGISTER were already acknowledged, so they are not acknowledged
+// again. An unknown msg id is logged and ignored.
 func (s *session) handleRegack(broker *mqtt.Client, m mqttsn.Regack, log *slog.Logger) error {
 	reg, ok := s.pendingRegs[m.MsgID]
 	if !ok {
@@ -155,6 +170,9 @@ func (s *session) handleRegack(broker *mqtt.Client, m mqttsn.Regack, log *slog.L
 	if m.ReturnCode != mqttsn.ReturnAccepted {
 		log.Warn("client rejected topic registration, dropping held PUBLISHes", "return_code", m.ReturnCode, "topic_id", reg.topicID)
 		for _, e := range reg.held {
+			if reg.fromSleep {
+				continue
+			}
 			if err := s.dropDownlink(broker, e); err != nil {
 				return err
 			}
@@ -166,6 +184,10 @@ func (s *session) handleRegack(broker *mqtt.Client, m mqttsn.Regack, log *slog.L
 		return nil
 	}
 	for _, e := range reg.held {
+		if reg.fromSleep {
+			s.sendFlushed(mqttsn.TopicIDNormal, reg.topicID, e, log)
+			continue
+		}
 		if err := s.sendDownlink(broker, reg.topicID, e, log); err != nil {
 			return err
 		}
@@ -174,10 +196,18 @@ func (s *session) handleRegack(broker *mqtt.Client, m mqttsn.Regack, log *slog.L
 }
 
 // handleClientPuback acknowledges a downlink QoS 1 PUBLISH to the broker once the client has PUBACKed it.
-// A rejected return code is logged, but the broker is still acknowledged so it does not retry forever. An
-// unknown msg id is logged and ignored.
+// A rejected return code is logged, but the broker is still acknowledged so it does not retry forever. A msg id
+// of a PUBLISH sent on wake was acknowledged to the broker when buffered, so it only leaves preAcked. An unknown
+// msg id is logged and ignored.
 func (s *session) handleClientPuback(broker *mqtt.Client, m mqttsn.Puback, log *slog.Logger) error {
 	if !s.downlinkAwaitingPuback(m.MsgID) {
+		if _, ok := s.preAcked[m.MsgID]; ok {
+			delete(s.preAcked, m.MsgID)
+			if m.ReturnCode != mqttsn.ReturnAccepted {
+				log.Warn("client rejected buffered PUBLISH", "return_code", m.ReturnCode)
+			}
+			return nil
+		}
 		log.Warn("ignored client PUBACK for unknown msg id", "msg_id", m.MsgID)
 		return nil
 	}

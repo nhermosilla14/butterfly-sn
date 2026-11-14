@@ -63,7 +63,7 @@ func TestSleepDoesNotTimeOutAtInactivityLimit(t *testing.T) {
 		t.Fatalf("waiting for silence: %v", err)
 	}
 	sendSN(t, r.client, r.gwAddr, mqttsn.Pingreq{})
-	expectSilence(t, r.client) // still asleep: PINGREQ is logged and ignored
+	readAs[mqttsn.Pingresp](t, r.client) // still asleep: an empty buffer answers PINGREQ at once
 	s := r.session()
 	if err := r.stop(); err != nil {
 		t.Fatalf("gateway Run: %v", err)
@@ -120,17 +120,13 @@ func TestSleepBufferOverflowDropsNewestAndAcksQoS1(t *testing.T) {
 	}
 }
 
-// TestSleepIgnoresOtherPackets: while asleep REGISTER, CONNECT and PINGREQ get no reply, and a broker PUBLISH
-// for an unknown topic is buffered without a REGISTER. The session is still asleep afterwards.
+// TestSleepIgnoresOtherPackets: while asleep REGISTER gets no reply, and a broker PUBLISH for an unknown topic is
+// buffered without a REGISTER. The session is still asleep afterwards.
 func TestSleepIgnoresOtherPackets(t *testing.T) {
 	r := startSubRigDuration(t, 60)
 	sleepClient(t, r.client, r.gwAddr, 5)
 
 	sendSN(t, r.client, r.gwAddr, mqttsn.Register{MsgID: 1, TopicName: "gw/sleep/reg"})
-	expectSilence(t, r.client)
-	sendSN(t, r.client, r.gwAddr, mqttsn.Connect{CleanSession: true, Duration: 60, ClientID: "gw-subscriptions"})
-	expectSilence(t, r.client)
-	sendSN(t, r.client, r.gwAddr, mqttsn.Pingreq{})
 	expectSilence(t, r.client)
 	r.brokerSend(brokerPublish(0x00, "gw/sleep/reg", 0, []byte("held")))
 	expectSilence(t, r.client)

@@ -22,6 +22,10 @@ downlink hold and REGISTER machinery, and timers for keepalive and inactivity.
 - While asleep, a broker PUBLISH is appended to the buffer (max 20, newest dropped and logged when full). QoS 1
   is acknowledged to the broker when buffered; QoS 0 needs no ack. Nothing is sent to the client. A broker packet
   already acked may be lost on overflow, by design.
+- Entering sleep converts PUBLISH messages held for a pending gateway REGISTER into the sleep buffer, in their
+  original order, acknowledging QoS 1 at that point (dropping and acknowledging on overflow), and clears the
+  pending registrations. A late REGACK for one of them is then an unknown id and is ignored. This prevents a
+  pre-sleep registration from stalling the wake flush.
 - Wake triggers:
   - PINGREQ with an empty buffer: PINGRESP at once, return to asleep, restart the sleep timer.
   - PINGREQ with buffered messages: enter awake and flush; PINGRESP after every buffered PUBLISH frame has been
@@ -35,7 +39,14 @@ downlink hold and REGISTER machinery, and timers for keepalive and inactivity.
 - Buffered QoS 1 messages were acknowledged to the broker when buffered, so the broker may have reused their
   packet ids by the time the client wakes. On flush each buffered QoS 1 message therefore gets a gateway-assigned
   msg id (1..65535, not in use by another delivery). Its client PUBACK is matched against a pre-acknowledged set
-  and never produces a second MQTT PUBACK; an unknown or rejected id is logged.
+  and never produces a second MQTT PUBACK, even if it arrives after the flush ended; an unknown or rejected id is
+  logged. The pre-acknowledged set is capped at 20: if it is full, a further buffered QoS 1 message is dropped and
+  logged rather than sent.
+- Because broker packet ids can collide with a pre-acknowledged gateway id still awaiting its client PUBACK, an
+  active downlink QoS 1 message with such a packet id is dropped and acknowledged to the broker instead of sending
+  a duplicate MQTT-SN msg id.
+- A CONNECT wake arms the active inactivity timer immediately, at CONNACK time, because the client is active from
+  then on.
 - DISCONNECT from asleep or awake is a normal disconnect: MQTT DISCONNECT, client DISCONNECT, session removed and
   buffer dropped. Sleep timer expiry is a loss: remove the session, close the broker socket bare when a will
   exists (publishing it), otherwise send MQTT DISCONNECT, send a best-effort client DISCONNECT and drop the

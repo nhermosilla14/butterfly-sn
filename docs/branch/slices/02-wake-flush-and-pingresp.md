@@ -1,6 +1,6 @@
 # Wake-up flush and PINGRESP
 
-- Status: In progress
+- Status: Done
 - Intents: 20261114-sleep-and-buffering
 - ADRs: 20261114-sleep-state-and-buffer-flush
 - Depends on: 01
