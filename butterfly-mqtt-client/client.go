@@ -1,5 +1,6 @@
-// Package mqtt is a minimal MQTT 3.1.1 client: it connects over TCP, sends CONNECT and
-// DISCONNECT and reads CONNACK. It has no knowledge of any gateway or other protocol.
+// Package mqtt is a minimal MQTT 3.1.1 client: it connects over TCP, sends CONNECT, DISCONNECT,
+// QoS 0 PUBLISH and SUBSCRIBE (QoS 0) and reads CONNACK, SUBACK and QoS 0 PUBLISH. It has no
+// knowledge of any gateway or other protocol.
 package mqtt
 
 import (
@@ -39,6 +40,7 @@ type Client struct {
 	writeMu   sync.Mutex
 	closeOnce sync.Once
 	closeErr  error
+	packetID  uint16 // last SUBSCRIBE packet identifier; only used by Subscribe
 }
 
 // Dial opens a TCP connection to addr ("host:port"), bounded by ctx and timeout.

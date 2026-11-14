@@ -157,6 +157,19 @@ func expect[T mqttsn.Message](t *testing.T, c *snClient, timeout time.Duration) 
 	return v
 }
 
+// register sends REGISTER and returns the REGACK. The caller checks the fields it cares about.
+func (c *snClient) register(msgID uint16, topic string) mqttsn.Regack {
+	c.t.Helper()
+	c.send(mqttsn.Register{MsgID: msgID, TopicName: topic})
+	return expect[mqttsn.Regack](c.t, c, waitShort)
+}
+
+// publishQoS0 sends a QoS 0 PUBLISH on a normal topic id. It expects no reply.
+func (c *snClient) publishQoS0(topicID uint16, data []byte) {
+	c.t.Helper()
+	c.send(mqttsn.Publish{TopicIDType: mqttsn.TopicIDNormal, TopicID: topicID, Data: data})
+}
+
 // connect performs CONNECT and asserts CONNACK Accepted.
 func connect(t *testing.T, c *snClient, clientID string) {
 	t.Helper()

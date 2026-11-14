@@ -8,9 +8,15 @@ import (
 )
 
 const (
+	typePublish    = 3
+	typeSubscribe  = 8
+	typeSuback     = 9
 	typeConnect    = 1
 	typeConnack    = 2
 	typeDisconnect = 14
+
+	flagRetain    = 0x01
+	flagSubscribe = 0x02 // fixed header flags of SUBSCRIBE are reserved and must be 0b0010
 )
 
 // ErrMalformedPacket reports a fixed header or body that breaks the MQTT 3.1.1 framing rules.

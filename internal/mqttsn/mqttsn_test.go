@@ -16,6 +16,15 @@ func TestRoundTrip(t *testing.T) {
 		Connack{ReturnCode: ReturnCongestion},
 		Disconnect{},
 		Disconnect{Duration: 300, HasDuration: true},
+		Register{TopicName: "sensors/temp"},
+		Register{TopicID: 0, MsgID: 0xBEEF, TopicName: "a"},
+		Regack{TopicID: 0xFFFE, MsgID: 7, ReturnCode: ReturnAccepted},
+		Regack{TopicID: 0, MsgID: 0xFFFF, ReturnCode: ReturnCongestion},
+		Publish{QoS: 0, TopicIDType: TopicIDNormal, TopicID: 1, Data: []byte("hi")},
+		Publish{DUP: true, QoS: 2, Retain: true, TopicIDType: TopicIDShort, TopicID: 0x6162, MsgID: 9, Data: []byte{0}},
+		Publish{QoS: 3, TopicIDType: TopicIDPredefined, TopicID: 3, MsgID: 0},
+		Publish{QoS: 0, TopicID: 5, Data: allBytes()},
+		Publish{QoS: 0, TopicID: 5},
 	}
 	for _, m := range cases {
 		b, err := Encode(m)
@@ -28,6 +37,79 @@ func TestRoundTrip(t *testing.T) {
 		}
 		if !reflect.DeepEqual(got, m) {
 			t.Fatalf("round trip: got %+v, want %+v", got, m)
+		}
+	}
+}
+
+func allBytes() []byte {
+	b := make([]byte, 256)
+	for i := range b {
+		b[i] = byte(i)
+	}
+	return b
+}
+
+func TestPublishPayloadBinaryAndEmpty(t *testing.T) {
+	payload := allBytes()
+	b, err := Encode(Publish{TopicID: 2, Data: payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Decode(b)
+	if err != nil || !bytes.Equal(got.(Publish).Data, payload) {
+		t.Fatalf("binary payload not preserved: %v", err)
+	}
+	b, _ = Encode(Publish{TopicID: 2})
+	if !bytes.Equal(b, []byte{7, 0x0C, 0x00, 0x00, 0x02, 0x00, 0x00}) {
+		t.Fatalf("empty payload encoding: % x", b)
+	}
+}
+
+func TestPublishDecodeCopiesData(t *testing.T) {
+	b, _ := Encode(Publish{TopicID: 1, Data: []byte("abc")})
+	got, err := Decode(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range b {
+		b[i] = 0 // the caller reuses its read buffer
+	}
+	if string(got.(Publish).Data) != "abc" {
+		t.Fatalf("decoded data aliases input: %q", got.(Publish).Data)
+	}
+}
+
+func TestPublishFlagsEncoding(t *testing.T) {
+	b, err := Encode(Publish{DUP: true, QoS: 2, Retain: true, TopicIDType: TopicIDShort, TopicID: 0x0102, MsgID: 0x0304})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []byte{7, 0x0C, 0x80 | 2<<5 | 0x10 | 0x02, 0x01, 0x02, 0x03, 0x04}
+	if !bytes.Equal(b, want) {
+		t.Fatalf("got % x, want % x", b, want)
+	}
+}
+
+func TestRegisterAndRegackEncodeBytes(t *testing.T) {
+	b, _ := Encode(Register{MsgID: 1, TopicName: "t"})
+	if !bytes.Equal(b, []byte{7, 0x0A, 0, 0, 0, 1, 't'}) {
+		t.Fatalf("REGISTER got % x", b)
+	}
+	b, _ = Encode(Regack{TopicID: 3, MsgID: 1, ReturnCode: ReturnAccepted})
+	if !bytes.Equal(b, []byte{7, 0x0B, 0, 3, 0, 1, 0}) {
+		t.Fatalf("REGACK got % x", b)
+	}
+}
+
+func TestEncodeInvalid(t *testing.T) {
+	cases := map[string]Message{
+		"register empty name": Register{TopicID: 0, MsgID: 1},
+		"publish qos 4":       Publish{QoS: 4},
+		"publish topic type":  Publish{TopicIDType: 4},
+	}
+	for name, m := range cases {
+		if _, err := Encode(m); err == nil {
+			t.Errorf("%s: no error", name)
 		}
 	}
 }
@@ -80,6 +162,12 @@ func TestDecodeErrors(t *testing.T) {
 		"connect bad protocol":         {0x08, 0x04, 0x04, 0x02, 0x00, 0x00, 'a', 'b'},
 		"disconnect 1 byte":            {0x03, 0x18, 0x01},
 		"disconnect 3 bytes":           {0x05, 0x18, 0, 0, 0},
+		"register no name":             {0x06, 0x0A, 0, 0, 0, 1},
+		"register short":               {0x05, 0x0A, 0, 0, 0},
+		"regack short":                 {0x06, 0x0B, 0, 1, 0, 1},
+		"regack long":                  {0x08, 0x0B, 0, 1, 0, 1, 0, 0},
+		"publish short":                {0x06, 0x0C, 0, 1, 0, 1},
+		"publish no body":              {0x02, 0x0C},
 	}
 	for name, b := range cases {
 		if _, err := Decode(b); !errors.Is(err, ErrMalformed) {
@@ -96,7 +184,11 @@ func TestDecodeUnsupported(t *testing.T) {
 }
 
 func FuzzDecode(f *testing.F) {
-	for _, m := range []Message{Connect{ClientID: "a"}, Connack{}, Disconnect{Duration: 1, HasDuration: true}} {
+	for _, m := range []Message{
+		Connect{ClientID: "a"}, Connack{}, Disconnect{Duration: 1, HasDuration: true},
+		Register{TopicID: 0, MsgID: 1, TopicName: "a/b"}, Regack{TopicID: 1, MsgID: 1},
+		Publish{QoS: 1, TopicID: 1, MsgID: 2, Data: []byte("x")},
+	} {
 		b, _ := Encode(m)
 		f.Add(b)
 	}

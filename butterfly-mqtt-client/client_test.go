@@ -15,8 +15,11 @@ func serve(t *testing.T, fn func(net.Conn)) *Client {
 	t.Helper()
 	cli, srv := net.Pipe()
 	go func() {
+		// Keep the broker end open until the client closes: net.Pipe deadlines fail once the peer
+		// is gone, which would make Connect's final deadline reset race with the server exiting.
 		defer srv.Close()
 		fn(srv)
+		_, _ = io.Copy(io.Discard, srv)
 	}()
 	c := &Client{conn: cli}
 	t.Cleanup(func() { _ = c.Close() })

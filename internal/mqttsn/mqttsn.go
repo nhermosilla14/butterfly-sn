@@ -9,12 +9,28 @@ import (
 const (
 	msgConnect    = 0x04
 	msgConnack    = 0x05
+	msgRegister   = 0x0A
+	msgRegack     = 0x0B
+	msgPublish    = 0x0C
 	msgDisconnect = 0x18
 
 	protocolID = 0x01
 
 	flagWill         = 0x08
 	flagCleanSession = 0x04
+
+	flagDUP    = 0x80
+	flagRetain = 0x10
+	qosShift   = 5
+	qosMask    = 0x03
+	topicMask  = 0x03
+)
+
+// TopicIDType values carried in the PUBLISH flags.
+const (
+	TopicIDNormal     = 0x00
+	TopicIDPredefined = 0x01
+	TopicIDShort      = 0x02
 )
 
 // Return codes carried by CONNACK.
@@ -32,7 +48,7 @@ var (
 	ErrUnsupported = errors.New("mqttsn: unsupported message type")
 )
 
-// Message is one decoded MQTT-SN message: Connect, Connack or Disconnect.
+// Message is one decoded MQTT-SN message: Connect, Connack, Register, Regack, Publish or Disconnect.
 type Message interface {
 	isMessage()
 }
@@ -50,6 +66,32 @@ type Connack struct {
 	ReturnCode byte
 }
 
+// Register is a REGISTER message. TopicID is 0 in client requests.
+type Register struct {
+	TopicID   uint16
+	MsgID     uint16
+	TopicName string
+}
+
+// Regack is a REGACK message answering a Register with the same MsgID.
+type Regack struct {
+	TopicID    uint16
+	MsgID      uint16
+	ReturnCode byte
+}
+
+// Publish is a PUBLISH message. QoS is 0 to 3 (3 is the MQTT-SN level -1). MsgID is only meaningful
+// for QoS 1 and 2. Data may be any bytes, including none.
+type Publish struct {
+	DUP         bool
+	QoS         byte
+	Retain      bool
+	TopicIDType byte
+	TopicID     uint16
+	MsgID       uint16
+	Data        []byte
+}
+
 // Disconnect is a DISCONNECT message. Duration is present only when HasDuration is set (sleep request).
 type Disconnect struct {
 	Duration    uint16
@@ -58,6 +100,9 @@ type Disconnect struct {
 
 func (Connect) isMessage()    {}
 func (Connack) isMessage()    {}
+func (Register) isMessage()   {}
+func (Regack) isMessage()     {}
+func (Publish) isMessage()    {}
 func (Disconnect) isMessage() {}
 
 // Encode serialises m with its length header.
@@ -79,6 +124,29 @@ func Encode(m Message) ([]byte, error) {
 	case Connack:
 		typ = msgConnack
 		body = []byte{m.ReturnCode}
+	case Register:
+		if m.TopicName == "" {
+			return nil, fmt.Errorf("%w: empty topic name", ErrMalformed)
+		}
+		typ = msgRegister
+		body = append([]byte{byte(m.TopicID >> 8), byte(m.TopicID), byte(m.MsgID >> 8), byte(m.MsgID)}, m.TopicName...)
+	case Regack:
+		typ = msgRegack
+		body = []byte{byte(m.TopicID >> 8), byte(m.TopicID), byte(m.MsgID >> 8), byte(m.MsgID), m.ReturnCode}
+	case Publish:
+		if m.QoS > qosMask || m.TopicIDType > topicMask {
+			return nil, fmt.Errorf("mqttsn: invalid PUBLISH flags: QoS %d, TopicIDType %d", m.QoS, m.TopicIDType)
+		}
+		typ = msgPublish
+		flags := m.TopicIDType | m.QoS<<qosShift
+		if m.DUP {
+			flags |= flagDUP
+		}
+		if m.Retain {
+			flags |= flagRetain
+		}
+		body = []byte{flags, byte(m.TopicID >> 8), byte(m.TopicID), byte(m.MsgID >> 8), byte(m.MsgID)}
+		body = append(body, m.Data...)
 	case Disconnect:
 		typ = msgDisconnect
 		if m.HasDuration {
@@ -135,6 +203,39 @@ func Decode(data []byte) (Message, error) {
 			return nil, ErrMalformed
 		}
 		return Connack{ReturnCode: body[0]}, nil
+	case msgRegister:
+		if len(body) < 5 {
+			return nil, ErrMalformed
+		}
+		return Register{
+			TopicID:   uint16(body[0])<<8 | uint16(body[1]),
+			MsgID:     uint16(body[2])<<8 | uint16(body[3]),
+			TopicName: string(body[4:]),
+		}, nil
+	case msgRegack:
+		if len(body) != 5 {
+			return nil, ErrMalformed
+		}
+		return Regack{
+			TopicID:    uint16(body[0])<<8 | uint16(body[1]),
+			MsgID:      uint16(body[2])<<8 | uint16(body[3]),
+			ReturnCode: body[4],
+		}, nil
+	case msgPublish:
+		if len(body) < 5 {
+			return nil, ErrMalformed
+		}
+		flags := body[0]
+		// Data is copied: data aliases the caller's read buffer, which is reused.
+		return Publish{
+			DUP:         flags&flagDUP != 0,
+			QoS:         (flags >> qosShift) & qosMask,
+			Retain:      flags&flagRetain != 0,
+			TopicIDType: flags & topicMask,
+			TopicID:     uint16(body[1])<<8 | uint16(body[2]),
+			MsgID:       uint16(body[3])<<8 | uint16(body[4]),
+			Data:        append([]byte(nil), body[5:]...),
+		}, nil
 	case msgDisconnect:
 		switch len(body) {
 		case 0:
