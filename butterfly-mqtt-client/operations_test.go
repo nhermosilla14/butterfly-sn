@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -250,7 +251,7 @@ func TestReadEventReturnsBrokerPacketsInArrivalOrder(t *testing.T) {
 	}
 	for _, w := range want {
 		got, err := c.ReadEvent(ctx)
-		if err != nil || got != w {
+		if err != nil || !reflect.DeepEqual(got, w) {
 			t.Fatalf("ReadEvent: %+v, %v; want %+v", got, err, w)
 		}
 	}
@@ -267,6 +268,24 @@ func TestReadEventMalformed(t *testing.T) {
 		"disconnect flags": {0xE1, 0x00},
 		"disconnect body":  {0xE0, 0x01, 0},
 		"connack":          {0x20, 0x02, 0, 0},
+		"suback flags":     {0x91, 0x03, 0, 1, 0},
+		"suback short":     {0x90, 0x02, 0, 1},
+		"suback long":      {0x90, 0x04, 0, 1, 0, 0},
+		"suback code 2":    {0x90, 0x03, 0, 1, 0x02},
+		"suback code 0x81": {0x90, 0x03, 0, 1, 0x81},
+		"unsuback flags":   {0xB1, 0x02, 0, 1},
+		"unsuback short":   {0xB0, 0x01, 0},
+		"unsuback long":    {0xB0, 0x03, 0, 1, 0},
+		"publish qos2":     {0x34, 0x05, 0, 1, 'a', 0, 1},
+		"publish qos3":     {0x36, 0x05, 0, 1, 'a', 0, 1},
+		"publish qos0 dup": {0x38, 0x03, 0, 1, 'a'},
+		"publish empty":    {0x30, 0x02, 0, 0},
+		"publish short":    {0x30, 0x01, 0},
+		"publish topic":    {0x30, 0x04, 0, 5, 'a', 'b'},
+		"publish wildcard": {0x30, 0x04, 0, 2, 'a', '+'},
+		"publish hash":     {0x30, 0x03, 0, 1, '#'},
+		"publish qos1 id":  {0x32, 0x05, 0, 1, 'a', 0, 0},
+		"publish qos1 cut": {0x32, 0x04, 0, 1, 'a', 0},
 	}
 	for name, raw := range cases {
 		c := serve(t, func(srv net.Conn) {
@@ -287,5 +306,137 @@ func TestReadEventCancelled(t *testing.T) {
 	cancel()
 	if _, err := c.ReadEvent(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v, want context.Canceled", err)
+	}
+}
+
+func TestReadEventSubackUnsubackPublishInArrivalOrder(t *testing.T) {
+	c := serve(t, func(srv net.Conn) {
+		_, _ = ReadPacket(srv)
+		suback, _ := packet(typeSuback, 0, []byte{0x00, 0x07, SubackQoS1})
+		refused, _ := packet(typeSuback, 0, []byte{0x00, 0x08, SubackError})
+		unsuback, _ := packet(typeUnsuback, 0, []byte{0x00, 0x09})
+		pub, _ := packet(typePublish, flagRetain|flagDUP|qos1Flag, []byte{0, 3, 'a', '/', 'b', 0x01, 0x02, 'x', 0})
+		qos0, _ := packet(typePublish, 0, []byte{0, 1, 't'})
+		_, _ = srv.Write(bytes.Join([][]byte{suback, refused, unsuback, pub, qos0}, nil))
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := c.SubscribeRequest("a/b", 1, 7); err != nil {
+		t.Fatal(err)
+	}
+	want := []Event{
+		{Kind: EventSuback, PacketID: 7, ReturnCode: SubackQoS1, GrantedQoS: SubackQoS1},
+		{Kind: EventSuback, PacketID: 8, ReturnCode: SubackError},
+		{Kind: EventUnsuback, PacketID: 9},
+		{Kind: EventPublish, Topic: "a/b", Payload: []byte{'x', 0}, QoS: 1, Retain: true, DUP: true, PacketID: 0x0102},
+		{Kind: EventPublish, Topic: "t"},
+	}
+	for _, w := range want {
+		got, err := c.ReadEvent(ctx)
+		if err != nil || !reflect.DeepEqual(got, w) {
+			t.Fatalf("ReadEvent: %+v, %v; want %+v", got, err, w)
+		}
+	}
+}
+
+func TestReadEventSubackQoS0Granted(t *testing.T) {
+	c := serve(t, func(srv net.Conn) {
+		suback, _ := packet(typeSuback, 0, []byte{0x00, 0x01, SubackQoS0})
+		_, _ = srv.Write(suback)
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	got, err := c.ReadEvent(ctx)
+	want := Event{Kind: EventSuback, PacketID: 1, ReturnCode: SubackQoS0}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("ReadEvent: %+v, %v; want %+v", got, err, want)
+	}
+}
+
+func TestReadEventPublishCopiesPayloadAndEmptyIsNil(t *testing.T) {
+	buf := []byte{0x30, 0x04, 0, 1, 'a', 'z'}
+	c := serve(t, func(srv net.Conn) {
+		_, _ = srv.Write(buf)
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	got, err := c.ReadEvent(ctx)
+	if err != nil || string(got.Payload) != "z" || got.Topic != "a" {
+		t.Fatalf("ReadEvent: %+v, %v", got, err)
+	}
+	empty := serve(t, func(srv net.Conn) {
+		_, _ = srv.Write([]byte{0x30, 0x03, 0, 1, 'a'})
+	})
+	got, err = empty.ReadEvent(ctx)
+	if err != nil || got.Payload != nil {
+		t.Fatalf("empty payload: %+v, %v", got, err)
+	}
+}
+
+func TestSubscribeRequestEncodesPacket(t *testing.T) {
+	got := make(chan Packet, 1)
+	c := serve(t, func(srv net.Conn) {
+		p, _ := ReadPacket(srv)
+		got <- p
+	})
+	if err := c.SubscribeRequest("a/+", 1, 0x1234); err != nil {
+		t.Fatal(err)
+	}
+	p := <-got
+	want := []byte{0x12, 0x34, 0, 3, 'a', '/', '+', 1}
+	if p.Type != typeSubscribe || p.Flags != 0x02 || !bytes.Equal(p.Body, want) {
+		t.Fatalf("SUBSCRIBE: type %d flags %#x body % x", p.Type, p.Flags, p.Body)
+	}
+}
+
+func TestUnsubscribeRequestEncodesPacket(t *testing.T) {
+	got := make(chan Packet, 1)
+	c := serve(t, func(srv net.Conn) {
+		p, _ := ReadPacket(srv)
+		got <- p
+	})
+	if err := c.UnsubscribeRequest("t", 2); err != nil {
+		t.Fatal(err)
+	}
+	p := <-got
+	if p.Type != typeUnsubscribe || p.Flags != 0x02 || !bytes.Equal(p.Body, []byte{0, 2, 0, 1, 't'}) {
+		t.Fatalf("UNSUBSCRIBE: type %d flags %#x body % x", p.Type, p.Flags, p.Body)
+	}
+}
+
+func TestPubackEncodesPacket(t *testing.T) {
+	got := make(chan Packet, 1)
+	c := serve(t, func(srv net.Conn) {
+		p, _ := ReadPacket(srv)
+		got <- p
+	})
+	if err := c.Puback(0xABCD); err != nil {
+		t.Fatal(err)
+	}
+	p := <-got
+	if p.Type != typePuback || p.Flags != 0 || !bytes.Equal(p.Body, []byte{0xAB, 0xCD}) {
+		t.Fatalf("PUBACK: type %d flags %#x body % x", p.Type, p.Flags, p.Body)
+	}
+}
+
+func TestRequestsRejectInvalidArguments(t *testing.T) {
+	c := &Client{}
+	if err := c.SubscribeRequest("", 0, 1); !errors.Is(err, ErrInvalidTopic) {
+		t.Errorf("empty filter: %v", err)
+	}
+	if err := c.SubscribeRequest("a", 2, 1); !errors.Is(err, ErrMalformedPacket) {
+		t.Errorf("qos 2: %v", err)
+	}
+	if err := c.SubscribeRequest("a", 0, 0); !errors.Is(err, ErrMalformedPacket) {
+		t.Errorf("id 0: %v", err)
+	}
+	if err := c.UnsubscribeRequest("", 1); !errors.Is(err, ErrInvalidTopic) {
+		t.Errorf("unsubscribe empty filter: %v", err)
+	}
+	if err := c.UnsubscribeRequest("a", 0); !errors.Is(err, ErrMalformedPacket) {
+		t.Errorf("unsubscribe id 0: %v", err)
+	}
+	if err := c.Puback(0); !errors.Is(err, ErrMalformedPacket) {
+		t.Errorf("puback id 0: %v", err)
 	}
 }

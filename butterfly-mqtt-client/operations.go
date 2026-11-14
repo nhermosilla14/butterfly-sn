@@ -89,17 +89,36 @@ const (
 	EventPuback     EventKind = iota + 1 // PUBACK; Event.PacketID is set
 	EventPingresp                        // PINGRESP
 	EventDisconnect                      // MQTT DISCONNECT: the broker closed the MQTT session
+	EventSuback                          // SUBACK; PacketID, ReturnCode and GrantedQoS are set
+	EventUnsuback                        // UNSUBACK; PacketID is set
+	EventPublish                         // PUBLISH from the broker; Topic, Payload, QoS, Retain, DUP and PacketID are set
 )
 
-// Event is one broker packet returned by ReadEvent. PacketID is only meaningful for EventPuback.
+// SUBACK return codes. Event.ReturnCode carries one of them.
+const (
+	SubackQoS0  = 0x00
+	SubackQoS1  = 0x01
+	SubackError = 0x80
+)
+
+// Event is one broker packet returned by ReadEvent. Only the fields named for its Kind are meaningful.
+// Event.PacketID is 0 for a QoS 0 PUBLISH. Payload is copied and is nil when empty.
 type Event struct {
-	Kind     EventKind
-	PacketID uint16
+	Kind       EventKind
+	PacketID   uint16
+	ReturnCode byte   // SUBACK: SubackQoS0, SubackQoS1 or SubackError
+	GrantedQoS byte   // SUBACK: granted QoS; 0 when refused
+	Topic      string // PUBLISH
+	Payload    []byte // PUBLISH
+	QoS        byte   // PUBLISH: 0 or 1
+	Retain     bool   // PUBLISH
+	DUP        bool   // PUBLISH
 }
 
 // ReadEvent waits for the next broker packet that ReadEvent handles and returns it in arrival order,
-// bounded by ctx. Packets are validated strictly: any other type, or a malformed PUBACK, PINGRESP or
-// DISCONNECT, is an error wrapping ErrMalformedPacket. It must not run concurrently with ReadPublish or Subscribe.
+// bounded by ctx. Packets are validated strictly: any other type, or a malformed PUBACK, PINGRESP,
+// DISCONNECT, SUBACK, UNSUBACK or PUBLISH, is an error wrapping ErrMalformedPacket. PUBLISH supports
+// QoS 0 and 1 only. It must not run concurrently with ReadPublish or Subscribe; see the package doc.
 func (c *Client) ReadEvent(ctx context.Context) (Event, error) {
 	p, err := c.readPacket(ctx)
 	if err != nil {
@@ -112,12 +131,124 @@ func (c *Client) ReadEvent(ctx context.Context) (Event, error) {
 		return Event{Kind: EventPingresp}, nil
 	case p.Type == typeDisconnect && p.Flags == 0 && len(p.Body) == 0:
 		return Event{Kind: EventDisconnect}, nil
+	case p.Type == typeSuback && p.Flags == 0 && len(p.Body) == 3:
+		return parseSuback(p.Body)
+	case p.Type == typeUnsuback && p.Flags == 0 && len(p.Body) == 2:
+		return Event{Kind: EventUnsuback, PacketID: uint16(p.Body[0])<<8 | uint16(p.Body[1])}, nil
+	case p.Type == typePublish:
+		return parsePublish(p.Flags, p.Body)
 	}
 	return Event{}, fmt.Errorf("%w: unexpected broker packet type %d flags %#x length %d", ErrMalformedPacket, p.Type, p.Flags, len(p.Body))
 }
 
+func parseSuback(body []byte) (Event, error) {
+	code := body[2]
+	switch code {
+	case SubackQoS0, SubackQoS1:
+		return Event{Kind: EventSuback, PacketID: packetID(body), ReturnCode: code, GrantedQoS: code}, nil
+	case SubackError:
+		return Event{Kind: EventSuback, PacketID: packetID(body), ReturnCode: code}, nil
+	}
+	return Event{}, fmt.Errorf("%w: SUBACK return code %#x", ErrMalformedPacket, code)
+}
+
+// parsePublish validates a broker PUBLISH: QoS 0 or 1, a non-empty topic name without wildcards and,
+// for QoS 1, a nonzero packet identifier after the topic. The payload is everything after that.
+func parsePublish(flags byte, body []byte) (Event, error) {
+	qos := (flags >> 1) & 0x03
+	dup := flags&flagDUP != 0
+	if qos > 1 || (qos == 0 && dup) || len(body) < 2 {
+		return Event{}, fmt.Errorf("%w: PUBLISH flags %#x or length %d", ErrMalformedPacket, flags, len(body))
+	}
+	n := int(body[0])<<8 | int(body[1])
+	rest := body[2:]
+	if n == 0 || len(rest) < n || strings.ContainsAny(string(rest[:n]), "+#") {
+		return Event{}, fmt.Errorf("%w: PUBLISH topic", ErrMalformedPacket)
+	}
+	ev := Event{
+		Kind:   EventPublish,
+		Topic:  string(rest[:n]),
+		QoS:    qos,
+		Retain: flags&flagRetain != 0,
+		DUP:    dup,
+	}
+	rest = rest[n:]
+	if qos == 1 {
+		if len(rest) < 2 || (rest[0] == 0 && rest[1] == 0) {
+			return Event{}, fmt.Errorf("%w: PUBLISH packet identifier", ErrMalformedPacket)
+		}
+		ev.PacketID = packetID(rest)
+		rest = rest[2:]
+	}
+	ev.Payload = append([]byte(nil), rest...)
+	return ev, nil
+}
+
+func packetID(b []byte) uint16 {
+	return uint16(b[0])<<8 | uint16(b[1])
+}
+
+// SubscribeRequest sends SUBSCRIBE for filter at QoS qos (0 or 1) with packet identifier id, which must not
+// be 0. It does not wait for SUBACK: the SUBACK arrives later and is read with ReadEvent.
+func (c *Client) SubscribeRequest(filter string, qos byte, id uint16) error {
+	if filter == "" {
+		return ErrInvalidTopic
+	}
+	if qos > 1 {
+		return fmt.Errorf("%w: requested QoS %d, want 0 or 1", ErrMalformedPacket, qos)
+	}
+	if id == 0 {
+		return fmt.Errorf("%w: packet identifier 0", ErrMalformedPacket)
+	}
+	body := []byte{byte(id >> 8), byte(id)}
+	body, err := appendString(body, filter)
+	if err != nil {
+		return err
+	}
+	body = append(body, qos)
+	pkt, err := packet(typeSubscribe, flagSubscribe, body)
+	if err != nil {
+		return err
+	}
+	return c.write(pkt)
+}
+
+// UnsubscribeRequest sends UNSUBSCRIBE for filter with packet identifier id, which must not be 0. It does
+// not wait for UNSUBACK: the UNSUBACK arrives later and is read with ReadEvent.
+func (c *Client) UnsubscribeRequest(filter string, id uint16) error {
+	if filter == "" {
+		return ErrInvalidTopic
+	}
+	if id == 0 {
+		return fmt.Errorf("%w: packet identifier 0", ErrMalformedPacket)
+	}
+	body := []byte{byte(id >> 8), byte(id)}
+	body, err := appendString(body, filter)
+	if err != nil {
+		return err
+	}
+	pkt, err := packet(typeUnsubscribe, flagSubscribe, body)
+	if err != nil {
+		return err
+	}
+	return c.write(pkt)
+}
+
+// Puback acknowledges a QoS 1 PUBLISH from the broker with packet identifier id, which must not be 0.
+func (c *Client) Puback(id uint16) error {
+	if id == 0 {
+		return fmt.Errorf("%w: packet identifier 0", ErrMalformedPacket)
+	}
+	pkt, err := packet(typePuback, 0, []byte{byte(id >> 8), byte(id)})
+	if err != nil {
+		return err
+	}
+	return c.write(pkt)
+}
+
 // Subscribe subscribes to filter at QoS 0 and waits for its SUBACK, bounded by ctx. It is meant for
-// observers that read deliveries with ReadPublish. Subscribe and ReadPublish must not run concurrently.
+// observers that read deliveries with ReadPublish. A connection uses either these observer reads
+// (Subscribe, ReadPublish) or the event reader (ReadEvent), never both.
 func (c *Client) Subscribe(ctx context.Context, filter string) error {
 	if filter == "" {
 		return ErrInvalidTopic
@@ -147,7 +278,7 @@ func (c *Client) Subscribe(ctx context.Context, filter string) error {
 }
 
 // ReadPublish waits for the next PUBLISH from the broker, bounded by ctx. Only QoS 0 is supported,
-// so nothing is acknowledged. Any other packet type is an error. It must not run concurrently with Subscribe.
+// so nothing is acknowledged. Any other packet type is an error. Use it only on observer connections; see Subscribe.
 func (c *Client) ReadPublish(ctx context.Context) (Message, error) {
 	p, err := c.readPacket(ctx)
 	if err != nil {

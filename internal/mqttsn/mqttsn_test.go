@@ -28,6 +28,13 @@ func TestRoundTrip(t *testing.T) {
 		Publish{QoS: 1, TopicID: 0xFFFE, MsgID: 0xBEEF, Data: []byte("q1")},
 		Puback{TopicID: 0xFFFE, MsgID: 0xBEEF, ReturnCode: ReturnAccepted},
 		Puback{TopicID: 1, MsgID: 1, ReturnCode: ReturnInvalidTopicID},
+		Subscribe{QoS: 1, TopicIDType: TopicIDNormal, MsgID: 0xBEEF, TopicName: "a/#"},
+		Subscribe{QoS: 0, TopicIDType: TopicIDShort, MsgID: 1, TopicName: "ab"},
+		Suback{QoS: 1, TopicID: 0xFFFE, MsgID: 0xBEEF, ReturnCode: ReturnAccepted},
+		Suback{QoS: 0, TopicID: 0, MsgID: 2, ReturnCode: ReturnCongestion},
+		Unsubscribe{TopicIDType: TopicIDNormal, MsgID: 3, TopicName: "a/+"},
+		Unsubscribe{TopicIDType: TopicIDShort, MsgID: 0xFFFF, TopicName: "xy"},
+		Unsuback{MsgID: 0x0102},
 		Pingreq{},
 		Pingreq{ClientID: "sensor-1"},
 		Pingresp{},
@@ -122,8 +129,87 @@ func TestRegisterAndRegackEncodeBytes(t *testing.T) {
 	}
 }
 
+func TestSubscribeUnsubscribeEncodeBytes(t *testing.T) {
+	b, _ := Encode(Subscribe{QoS: 1, MsgID: 0x0102, TopicName: "t"})
+	if !bytes.Equal(b, []byte{6, 0x12, 0x20, 0x01, 0x02, 't'}) {
+		t.Fatalf("SUBSCRIBE got % x", b)
+	}
+	b, _ = Encode(Subscribe{TopicIDType: TopicIDShort, QoS: 2, MsgID: 3, TopicName: "ab"})
+	if !bytes.Equal(b, []byte{7, 0x12, 0x40 | 0x02, 0, 3, 'a', 'b'}) {
+		t.Fatalf("SUBSCRIBE short got % x", b)
+	}
+	b, _ = Encode(Suback{QoS: 1, TopicID: 0x0102, MsgID: 0x0304, ReturnCode: ReturnCongestion})
+	if !bytes.Equal(b, []byte{8, 0x13, 0x20, 0x01, 0x02, 0x03, 0x04, 0x01}) {
+		t.Fatalf("SUBACK got % x", b)
+	}
+	b, _ = Encode(Unsubscribe{MsgID: 5, TopicName: "a/#"})
+	if !bytes.Equal(b, []byte{8, 0x14, 0x00, 0x00, 0x05, 'a', '/', '#'}) {
+		t.Fatalf("UNSUBSCRIBE got % x", b)
+	}
+	b, _ = Encode(Unsubscribe{TopicIDType: TopicIDShort, MsgID: 6, TopicName: "ab"})
+	if !bytes.Equal(b, []byte{7, 0x14, 0x02, 0x00, 0x06, 'a', 'b'}) {
+		t.Fatalf("UNSUBSCRIBE short got % x", b)
+	}
+	b, _ = Encode(Unsuback{MsgID: 0x0102})
+	if !bytes.Equal(b, []byte{4, 0x15, 0x01, 0x02}) {
+		t.Fatalf("UNSUBACK got % x", b)
+	}
+}
+
+func TestSubscribeDecodeMalformed(t *testing.T) {
+	cases := map[string][]byte{
+		"subscribe no name":   {5, 0x12, 0x00, 0x00, 0x01},
+		"subscribe short":     {4, 0x12, 0x00, 0x01},
+		"unsubscribe no name": {5, 0x14, 0x00, 0x00, 0x01},
+		"unsubscribe short":   {4, 0x14, 0x00, 0x01},
+		"suback short":        {7, 0x13, 0x00, 0x00, 0x01, 0x00, 0x01},
+		"suback long":         {9, 0x13, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00},
+		"unsuback short":      {3, 0x15, 0x01},
+		"unsuback long":       {5, 0x15, 0x00, 0x01, 0x00},
+	}
+	for name, b := range cases {
+		if _, err := Decode(b); !errors.Is(err, ErrMalformed) {
+			t.Errorf("%s: got %v, want ErrMalformed", name, err)
+		}
+	}
+}
+
+func TestSubscribeUnsubscribeDecodeBytes(t *testing.T) {
+	m, err := Decode([]byte{6, 0x12, 0x20, 0x01, 0x02, 't'})
+	want := Subscribe{QoS: 1, MsgID: 0x0102, TopicName: "t"}
+	if err != nil || !reflect.DeepEqual(m, want) {
+		t.Fatalf("got %+v, %v; want %+v", m, err, want)
+	}
+	m, err = Decode([]byte{8, 0x13, 0x20, 0x00, 0x09, 0x00, 0x03, 0x80})
+	wantAck := Suback{QoS: 1, TopicID: 9, MsgID: 3, ReturnCode: 0x80}
+	if err != nil || !reflect.DeepEqual(m, wantAck) {
+		t.Fatalf("SUBACK got %+v, %v; want %+v", m, err, wantAck)
+	}
+	m, err = Decode([]byte{7, 0x12, 0x22, 0x00, 0x04, 'a', 'b'})
+	wantShort := Subscribe{QoS: 1, TopicIDType: TopicIDShort, MsgID: 4, TopicName: "ab"}
+	if err != nil || !reflect.DeepEqual(m, wantShort) {
+		t.Fatalf("SUBSCRIBE short got %+v, %v; want %+v", m, err, wantShort)
+	}
+	m, err = Decode([]byte{7, 0x14, 0x02, 0x00, 0x05, 'a', 'b'})
+	wantUnsub := Unsubscribe{TopicIDType: TopicIDShort, MsgID: 5, TopicName: "ab"}
+	if err != nil || !reflect.DeepEqual(m, wantUnsub) {
+		t.Fatalf("UNSUBSCRIBE short got %+v, %v; want %+v", m, err, wantUnsub)
+	}
+	m, err = Decode([]byte{8, 0x0C, 0x02, 0x61, 0x62, 0x00, 0x01, 'x'})
+	wantPub := Publish{TopicIDType: TopicIDShort, TopicID: 0x6162, MsgID: 1, Data: []byte("x")}
+	if err != nil || !reflect.DeepEqual(m, wantPub) {
+		t.Fatalf("PUBLISH short got %+v, %v; want %+v", m, err, wantPub)
+	}
+}
+
 func TestEncodeInvalid(t *testing.T) {
 	cases := map[string]Message{
+		"subscribe empty name":     Subscribe{MsgID: 1},
+		"subscribe qos 4":          Subscribe{QoS: 4, TopicName: "t"},
+		"subscribe topic type":     Subscribe{TopicIDType: 4, TopicName: "t"},
+		"suback qos 4":             Suback{QoS: 4},
+		"unsubscribe empty name":   Unsubscribe{MsgID: 1},
+		"unsubscribe topic type":   Unsubscribe{TopicIDType: 4, TopicName: "t"},
 		"register empty name":      Register{TopicID: 0, MsgID: 1},
 		"publish qos 4":            Publish{QoS: 4},
 		"publish topic type":       Publish{TopicIDType: 4},
@@ -262,8 +348,8 @@ func TestWillTopicDecodeIgnoresUnusedFlags(t *testing.T) {
 }
 
 func TestDecodeUnsupported(t *testing.T) {
-	// SUBSCRIBE (0x12) is valid MQTT-SN but not implemented yet.
-	if _, err := Decode([]byte{0x02, 0x12}); !errors.Is(err, ErrUnsupported) {
+	// ADVERTISE (0x00) is valid MQTT-SN but not implemented yet.
+	if _, err := Decode([]byte{0x02, 0x00}); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("got %v, want ErrUnsupported", err)
 	}
 }
@@ -273,6 +359,7 @@ func FuzzDecode(f *testing.F) {
 		Connect{ClientID: "a"}, Connack{}, Disconnect{Duration: 1, HasDuration: true},
 		Register{TopicID: 0, MsgID: 1, TopicName: "a/b"}, Regack{TopicID: 1, MsgID: 1},
 		Publish{QoS: 1, TopicID: 1, MsgID: 2, Data: []byte("x")}, Puback{TopicID: 1, MsgID: 2},
+		Subscribe{MsgID: 1, TopicName: "a/#"}, Suback{MsgID: 1}, Unsubscribe{MsgID: 1, TopicName: "a"}, Unsuback{MsgID: 1},
 		Pingreq{}, Pingreq{ClientID: "a"}, Pingresp{},
 		WillTopicReq{}, WillTopic{QoS: 1, Retain: true, Topic: "a"}, WillMsgReq{}, WillMsg{Payload: []byte("x")},
 	} {
@@ -280,6 +367,13 @@ func FuzzDecode(f *testing.F) {
 		f.Add(b)
 	}
 	f.Add([]byte{0x01, 0xFF, 0xFF, 0x04})
+	f.Add([]byte{6, 0x12, 0x20, 0x00, 0x01, 'a'})
+	f.Add([]byte{8, 0x13, 0x00, 0x00, 0x01, 0x00, 0x02, 0x80})
+	f.Add([]byte{5, 0x14, 0x00, 0x00, 0x01, 'a'})
+	f.Add([]byte{7, 0x12, 0x22, 0x00, 0x01, 'a', 'b'})
+	f.Add([]byte{7, 0x14, 0x02, 0x00, 0x01, 'a', 'b'})
+	f.Add([]byte{8, 0x0C, 0x02, 0x00, 0x00, 0x00, 0x01, 'x'})
+	f.Add([]byte{4, 0x15, 0x00, 0x01})
 	f.Fuzz(func(t *testing.T, data []byte) {
 		_, _ = Decode(data)
 	})
