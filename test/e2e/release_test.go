@@ -272,12 +272,21 @@ func TestWindowsBinaryWithWine(t *testing.T) {
 	exe := filepath.Join(dist, "windows-amd64", "butterfly-sn.exe")
 
 	prefix := t.TempDir()
-	env := append(os.Environ(), "WINEPREFIX="+prefix, "WINEDEBUG=-all", "WINEARCH=win64",
-		"WINEDLLOVERRIDES=mscoree,mshtml=d;winemenubuilder.exe=d", "DISPLAY=")
+	// Headless: no X11 or Wayland driver, so wineboot cannot open windows on the developer's desktop.
+	var env []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "DISPLAY=") && !strings.HasPrefix(kv, "WAYLAND_DISPLAY=") {
+			env = append(env, kv)
+		}
+	}
+	env = append(env, "WINEPREFIX="+prefix, "WINEDEBUG=-all", "WINEARCH=win64",
+		"WINEDLLOVERRIDES=mscoree,mshtml=d;winemenubuilder.exe=d;winex11.drv=d;winewayland.drv=d")
 	t.Cleanup(func() {
-		k := exec.Command("wineserver", "-k")
-		k.Env = env
-		_ = k.Run()
+		if ws := findWineserver(); ws != "" {
+			k := exec.Command(ws, "-k")
+			k.Env = env
+			_ = k.Run()
+		}
 	})
 	wine := func(timeout time.Duration, args ...string) ([]byte, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -291,8 +300,8 @@ func TestWindowsBinaryWithWine(t *testing.T) {
 		return stdout.Bytes(), err
 	}
 
-	if _, err := wine(20*time.Second, "cmd", "/c", "exit"); err != nil {
-		t.Skipf("wine does not start in 20s probe: %v", err)
+	if _, err := wine(90*time.Second, "cmd", "/c", "exit"); err != nil {
+		t.Skipf("wine does not start in 90s probe: %v", err)
 	}
 	out, err := wine(60*time.Second, exe, "-version")
 	if err != nil {
@@ -304,4 +313,18 @@ func TestWindowsBinaryWithWine(t *testing.T) {
 
 	// Not checked: SEARCHGW under wine. Go's UDP listen fails there (WSAIoctl error 10045, wine lacks
 	// SIO_UDP_CONNRESET), so only -version is asserted.
+}
+
+// findWineserver locates wineserver, which distributions often keep off PATH (Debian and Ubuntu put it under
+// /usr/lib/<triplet>/wine). An empty result means it was not found.
+func findWineserver() string {
+	if p, err := exec.LookPath("wineserver"); err == nil {
+		return p
+	}
+	for _, pattern := range []string{"/usr/lib/wine/wineserver*", "/usr/lib/*/wine/wineserver*", "/usr/lib/wine-stable/wineserver*"} {
+		if m, _ := filepath.Glob(pattern); len(m) > 0 {
+			return m[0]
+		}
+	}
+	return ""
 }
