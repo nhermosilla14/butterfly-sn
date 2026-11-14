@@ -10,5 +10,4 @@ One file per functional area describing delivered behaviour, with the tests that
 - [sleep.md](sleep.md): sleep entry and expiry, downlink buffering, wake-up flush.
 - [discovery.md](discovery.md): SEARCHGW/GWINFO and periodic ADVERTISE.
 - [configuration.md](configuration.md): YAML configuration keys, defaults and validation.
-
-Planned areas: operations.
+- [operations.md](operations.md): version flag, release binaries, container image, CI and releases.

@@ -39,8 +39,10 @@ patched Eclipse Paho MQTT-SN gateway (C++), replaced to get a maintainable, robu
 Go implementation. Never copy code from the Paho sources (EPL/EDL) into this repo.
 
 ## Conventions
-- Tooling: Go (`go test ./...`, `gofmt`, `go vet`); e2e tests need Docker (testcontainers-go); build and CI helpers are decided in ADRs and
-  recorded here when they exist.
+- Tooling: Go (`go test ./...`, `gofmt`, `go vet`); e2e tests need Docker (testcontainers-go). The `Makefile` is the
+  single entry point for builds and releases (`make test`, `make check`, `make dist`, `make image`, `make
+  image-test`); CI calls only make targets, so add a target before using a new command in a workflow. Container
+  work uses the podman CLI only: never start the Podman API socket.
 - E2E tests use unique client ids and topic names per run: the shared broker keeps state and logs across
   `-count` runs, so fixed names make repeated runs fail.
 - Git workflow: git-flow (skill `git-flow-workflow`). Integration branch: `develop`; `main` holds releases.

@@ -22,6 +22,6 @@ broadcast address on the listen port (see [discovery.md](discovery.md)).
 ## Not supported
 - Hot reload: configuration is read once at startup.
 - TLS, authentication and credentials for the broker connection; not planned for the transparent gateway.
-- Container image and release builds; separate intent.
+- Configuration by environment variable: containers mount the YAML file (see [operations.md](operations.md)).
 - Multicast discovery and per-key discovery settings beyond `gateway_id`, `advertise_interval` and
   `advertise_address`; see [discovery.md](discovery.md).
