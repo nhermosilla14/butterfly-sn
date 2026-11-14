@@ -33,10 +33,12 @@ var advertiseTick = func(seconds int) time.Duration { return time.Duration(secon
 
 // Gateway is a UDP listener bound by New and served by Run.
 type Gateway struct {
-	cfg  config.Config
-	log  *slog.Logger
-	conn *net.UDPConn
-	wg   sync.WaitGroup
+	cfg           config.Config
+	log           *slog.Logger
+	conn          *net.UDPConn
+	wg            sync.WaitGroup
+	retryInterval time.Duration // from cfg.RetryInterval; tests shorten it
+	retryLimit    int           // from cfg.RetryLimit
 
 	mu       sync.Mutex
 	sessions map[string]*session // keyed by sender address
@@ -52,7 +54,14 @@ func New(cfg config.Config, log *slog.Logger) (*Gateway, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Gateway{cfg: cfg, log: log, conn: conn, sessions: make(map[string]*session)}, nil
+	return &Gateway{
+		cfg:           cfg,
+		log:           log,
+		conn:          conn,
+		sessions:      make(map[string]*session),
+		retryInterval: time.Duration(cfg.RetryInterval) * time.Second,
+		retryLimit:    cfg.RetryLimit,
+	}, nil
 }
 
 // Addr returns the bound UDP address.

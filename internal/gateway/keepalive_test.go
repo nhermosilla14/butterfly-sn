@@ -80,7 +80,7 @@ func (pb *pingBroker) serve() {
 // startKeepaliveGateway runs a gateway against brokerAddr and returns its UDP address and a client socket.
 func startKeepaliveGateway(t *testing.T, brokerAddr string) (*net.UDPAddr, *net.UDPConn) {
 	t.Helper()
-	cfg := config.Config{Listen: "127.0.0.1:0", Broker: brokerAddr, MaxClients: 10}
+	cfg := config.Config{Listen: "127.0.0.1:0", Broker: brokerAddr, MaxClients: 10, RetryInterval: 10, RetryLimit: 5}
 	g, err := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)

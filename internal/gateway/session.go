@@ -16,6 +16,7 @@ import (
 var (
 	errBrokerDisconnect = errors.New("broker sent MQTT DISCONNECT")
 	errPingTimeout      = errors.New("broker PINGRESP missing")
+	errBrokerSilent     = errors.New("broker did not answer a SUBSCRIBE or UNSUBSCRIBE in time")
 )
 
 // session owns one MQTT-SN client and its broker connection. Only run touches session state.
@@ -30,9 +31,9 @@ type session struct {
 	pending map[uint16]uint16
 	// pendingSubs maps the msg id of each SUBSCRIBE awaiting the broker's SUBACK to what it reports. See pendingSub.
 	pendingSubs map[uint16]pendingSub
-	// pendingUnsubs maps the msg id of each UNSUBSCRIBE awaiting the broker's UNSUBACK to its short name, or to
-	// "" for a normal one.
-	pendingUnsubs map[uint16]string
+	// pendingUnsubs maps the msg id of each UNSUBSCRIBE awaiting the broker's UNSUBACK to what it reports. See
+	// pendingUnsub.
+	pendingUnsubs map[uint16]pendingUnsub
 	// shortSubs holds the two-character short names this session is subscribed to. They do not use the table.
 	shortSubs map[string]struct{}
 	// regMsgID is the last gateway REGISTER msg id issued; see nextRegMsgID.
@@ -69,6 +70,12 @@ type session struct {
 	// preAcked holds the gateway msg ids of the QoS 1 PUBLISHes sent on wake. The broker was acknowledged when
 	// each one was buffered, so the client's PUBACK for these must not produce a second broker PUBACK.
 	preAcked map[uint16]struct{}
+	// retries holds the gateway REGISTERs and QoS 1 PUBLISHes to the client awaiting their replies. retryTimer
+	// fires at the earliest due entry or broker request deadline. See retry.go.
+	retries    map[retryKey]*retryEntry
+	retryTimer *time.Timer
+	// parked holds the QoS 1 PUBLISHes awaiting PUBACK while the client sleeps. See clearRetries.
+	parked map[retryKey]mqttsn.Message
 }
 
 // willState is the will a client sent in the handshake. hasWill is set only once the will message arrived;
@@ -126,12 +133,15 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 	log := s.gw.log.With("client", s.addr.String(), "client_id", c.ClientID)
 	s.pending = make(map[uint16]uint16)
 	s.pendingSubs = make(map[uint16]pendingSub)
-	s.pendingUnsubs = make(map[uint16]string)
+	s.pendingUnsubs = make(map[uint16]pendingUnsub)
 	s.shortSubs = make(map[string]struct{})
 	s.pendingRegs = make(map[uint16]*pendingReg)
 	s.regByTopic = make(map[string]uint16)
 	s.pendingDownlink = make(map[uint16]uint16)
 	s.preAcked = make(map[uint16]struct{})
+	s.retries = make(map[retryKey]*retryEntry)
+	s.parked = make(map[retryKey]mqttsn.Message)
+	defer s.stopRetryTimer()
 	if c.Will && !s.awaitWill(ctx, log) {
 		return
 	}
@@ -207,12 +217,14 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 		s.flushing = false
 		if s.flushPing {
 			s.gw.sendTo(s.addr, mqttsn.Pingresp{})
+			s.clearRetries()
 			armSleep()
 			log.Info("client asleep again")
 		}
 	}
 
 	for {
+		retryDue := s.armRetry()
 		select {
 		case <-ctx.Done():
 			endBrokerConn(broker, s.will.hasWill)
@@ -257,6 +269,15 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 			log.Warn("client asleep beyond its sleep duration, disconnecting")
 			s.clientTimedOut(broker)
 			return
+		case <-retryDue:
+			if s.retransmitDue(log) {
+				s.clientTimedOut(broker)
+				return
+			}
+			if err := s.checkBrokerRequests(log); err != nil {
+				s.loseBroker(log, err)
+				return
+			}
 		case in := <-s.inbox:
 			lastClient = in.at
 			if s.sleeping && s.ignoredWhileAsleep(in.msg, log) {
@@ -277,6 +298,7 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 				}
 				log.Info("client woke with PINGREQ", "buffered", len(s.sleepBuf))
 				s.flushing, s.flushPing = true, true
+				s.restoreParked()
 				disarmSleep()
 				runFlush()
 			case mqttsn.Connect:
@@ -289,6 +311,7 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 				log.Info("client woke with CONNECT", "buffered", len(s.sleepBuf))
 				s.sleeping = false
 				s.flushing, s.flushPing = true, false
+				s.restoreParked()
 				disarmSleep()
 				if limit > 0 {
 					inactivity = time.NewTimer(limit)

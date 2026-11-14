@@ -21,7 +21,7 @@ bin/butterfly-sn -config config.yaml
 ```
 
 ## Usage
-Flag `-config <file>` (required) and `-version`, which prints `butterfly-sn <version>` and exits. Configuration keys (`listen`, `broker`, `max_clients`, `log_level`, `gateway_id`, `advertise_interval`, `advertise_address`) are documented in `config.example.yaml`. Stop with SIGINT or SIGTERM.
+Flag `-config <file>` (required) and `-version`, which prints `butterfly-sn <version>` and exits. Configuration keys (`listen`, `broker`, `max_clients`, `log_level`, `gateway_id`, `advertise_interval`, `advertise_address`, `retry_interval`, `retry_limit`) are documented in `config.example.yaml`. Stop with SIGINT or SIGTERM.
 
 ## Building and releasing
 `make help` lists the targets:

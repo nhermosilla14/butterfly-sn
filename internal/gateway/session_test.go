@@ -112,7 +112,7 @@ func sendSN(t *testing.T, conn *net.UDPConn, to *net.UDPAddr, m mqttsn.Message) 
 // against a fake broker that withholds PUBACK. No MQTT-SN PUBACK may arrive before the broker's PUBACK.
 func TestQoS1PubackWaitsForBrokerPuback(t *testing.T) {
 	fb := startFakeBroker(t)
-	cfg := config.Config{Listen: "127.0.0.1:0", Broker: fb.ln.Addr().String(), MaxClients: 10}
+	cfg := config.Config{Listen: "127.0.0.1:0", Broker: fb.ln.Addr().String(), MaxClients: 10, RetryInterval: 10, RetryLimit: 5}
 	g, err := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)

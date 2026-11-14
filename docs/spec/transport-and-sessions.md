@@ -49,15 +49,22 @@ disables all of this.
 ### Broker connection loss
 When the broker connection ends, the client is told instead of being left to fail later. Any loss cause ends
 the session and frees its slot: TCP close or read error, a failed broker write, an MQTT DISCONNECT, or a
-PINGREQ the broker never answers. Pending QoS 1 acknowledgements are abandoned. A stored will is published by
-the broker. The session teardown, loss cause and client identity are logged, never payload bytes.
+PINGREQ the broker never answers, or a SUBSCRIBE or UNSUBSCRIBE it leaves unanswered for `retry_interval` times
+`retry_limit` (it is never retransmitted: MQTT over TCP does not retransmit). Pending QoS 1 acknowledgements are
+abandoned and every pending exchange is released with the session, so a new CONNECT with the same client id starts
+with no leftover state. A stored will is published by the broker. The session teardown, loss cause and client identity are logged, never payload bytes.
 - Criteria:
   - A dropped or reset broker connection, or an MQTT DISCONNECT from the broker, gives the client DISCONNECT;
     later packets from it get DISCONNECT.
   - A broker PINGREQ left unanswered gives the client DISCONNECT.
   - With `max_clients` reached, the slot is accepted for a new client once the session loses its broker.
   - A failed QoS 0 PUBLISH, QoS 1 PUBLISH or PINGREQ write is reported as a loss.
-- Tests: TestBrokerDropDisconnectsClient, TestBrokerDropFreesClientSlot, TestBrokerDisconnectPacketDisconnectsClient, TestBrokerCloseDisconnectsClient, TestBrokerResetDisconnectsClient, TestBrokerPingTimeoutDisconnectsClient, TestPublishQoS0WriteFailureIsError, TestPublishQoS1WriteFailureIsError, TestPingreqWriteFailureIsError
+  - A SUBSCRIBE or UNSUBSCRIBE the broker does not answer within `retry_interval` times `retry_limit` gives the
+    client DISCONNECT and frees the slot, also when the client is asleep; one answered in time leaves the session
+    alive.
+  - After a loss with pending REGISTER, SUBSCRIBE and downlink state, the same client id connects again with
+    none of it: the first downlink needs a new REGISTER and old REGACK or SUBACK ids are ignored.
+- Tests: TestBrokerRequestSubscribeUnansweredDisconnectsAndFreesSlot, TestBrokerRequestUnsubscribeUnansweredDisconnectsAndFreesSlot, TestBrokerRequestAnsweredInsideBudgetKeepsSession, TestBrokerRequestPendingWhileSleepingStillTimesOut, TestTeardownReconnectStartsClean, TestBrokerDropDisconnectsClient, TestBrokerDropFreesClientSlot, TestBrokerDisconnectPacketDisconnectsClient, TestBrokerCloseDisconnectsClient, TestBrokerResetDisconnectsClient, TestBrokerPingTimeoutDisconnectsClient, TestPublishQoS0WriteFailureIsError, TestPublishQoS1WriteFailureIsError, TestPingreqWriteFailureIsError
 
 ### Client identity
 Client ids are whole strings matched exactly and case-sensitively. A client id that is only a prefix of another

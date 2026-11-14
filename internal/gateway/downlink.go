@@ -97,7 +97,7 @@ func (s *session) handleDownlink(broker *mqtt.Client, e mqtt.Event, log *slog.Lo
 	s.regSeq++
 	s.pendingRegs[msgID] = &pendingReg{topic: e.Topic, topicID: id, held: []mqtt.Event{e}, seq: s.regSeq}
 	s.regByTopic[e.Topic] = msgID
-	s.gw.sendTo(s.addr, mqttsn.Register{TopicID: id, MsgID: msgID, TopicName: e.Topic})
+	s.sendSupervised(kindRegister, msgID, mqttsn.Register{TopicID: id, MsgID: msgID, TopicName: e.Topic})
 	return nil
 }
 
@@ -126,7 +126,7 @@ func (s *session) sendDownlinkTo(broker *mqtt.Client, topicIDType byte, topicID 
 		log.Warn("too many downlink PUBLISH awaiting client PUBACK, dropping")
 		return s.dropDownlink(broker, e)
 	}
-	s.gw.sendTo(s.addr, mqttsn.Publish{QoS: 1, Retain: e.Retain, DUP: e.DUP, TopicIDType: topicIDType, TopicID: topicID, MsgID: e.PacketID, Data: e.Payload})
+	s.sendSupervised(kindPublish, e.PacketID, mqttsn.Publish{QoS: 1, Retain: e.Retain, DUP: e.DUP, TopicIDType: topicIDType, TopicID: topicID, MsgID: e.PacketID, Data: e.Payload})
 	s.pendingDownlink[e.PacketID] = topicID
 	return nil
 }
@@ -160,6 +160,7 @@ func (s *session) pubackBroker(broker *mqtt.Client, id uint16) error {
 // the table. Held PUBLISHes of a sleep-origin REGISTER were already acknowledged, so they are not acknowledged
 // again. An unknown msg id is logged and ignored.
 func (s *session) handleRegack(broker *mqtt.Client, m mqttsn.Regack, log *slog.Logger) error {
+	s.ackRetry(kindRegister, m.MsgID)
 	reg, ok := s.pendingRegs[m.MsgID]
 	if !ok {
 		log.Warn("ignored REGACK for unknown msg id", "msg_id", m.MsgID)
@@ -200,6 +201,7 @@ func (s *session) handleRegack(broker *mqtt.Client, m mqttsn.Regack, log *slog.L
 // of a PUBLISH sent on wake was acknowledged to the broker when buffered, so it only leaves preAcked. An unknown
 // msg id is logged and ignored.
 func (s *session) handleClientPuback(broker *mqtt.Client, m mqttsn.Puback, log *slog.Logger) error {
+	s.ackRetry(kindPublish, m.MsgID)
 	if !s.downlinkAwaitingPuback(m.MsgID) {
 		if _, ok := s.preAcked[m.MsgID]; ok {
 			delete(s.preAcked, m.MsgID)

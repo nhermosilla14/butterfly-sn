@@ -52,7 +52,7 @@ func (s *session) flushHead(log *slog.Logger) bool {
 	s.regSeq++
 	s.pendingRegs[msgID] = &pendingReg{topic: e.Topic, topicID: id, held: []mqtt.Event{e}, fromSleep: true, seq: s.regSeq}
 	s.regByTopic[e.Topic] = msgID
-	s.gw.sendTo(s.addr, mqttsn.Register{TopicID: id, MsgID: msgID, TopicName: e.Topic})
+	s.sendSupervised(kindRegister, msgID, mqttsn.Register{TopicID: id, MsgID: msgID, TopicName: e.Topic})
 	return true
 }
 
@@ -70,7 +70,7 @@ func (s *session) sendFlushed(topicIDType byte, topicID uint16, e mqtt.Event, lo
 		return
 	}
 	msgID := s.nextFlushMsgID()
-	s.gw.sendTo(s.addr, mqttsn.Publish{QoS: 1, Retain: e.Retain, DUP: e.DUP, TopicIDType: topicIDType, TopicID: topicID, MsgID: msgID, Data: e.Payload})
+	s.sendSupervised(kindPublish, msgID, mqttsn.Publish{QoS: 1, Retain: e.Retain, DUP: e.DUP, TopicIDType: topicIDType, TopicID: topicID, MsgID: msgID, Data: e.Payload})
 	s.preAcked[msgID] = struct{}{}
 }
 

@@ -1,8 +1,8 @@
 # Architecture
 
-Current state after the delivery intent (connect, QoS 0 and QoS 1 publish in both directions, subscriptions with
+Current state after the broker outage intent (connect, QoS 0 and QoS 1 publish in both directions, subscriptions with
 wildcards and short names, gateway topic registration, disconnect, bad-input handling, client timeouts, broker
-keepalive, broker-loss handling, will handling, sleep with buffered downlink and wake flush, gateway discovery, and release builds with a container image). Decisions:
+keepalive, broker-loss handling, will handling, sleep with buffered downlink and wake flush, gateway discovery, retransmission and bounded waits, and release builds with a container image). Decisions:
 `docs/adr/` and `docs/branch/adr/`.
 
 ```
@@ -92,6 +92,17 @@ keepalive, broker-loss handling, will handling, sleep with buffered downlink and
 - A will-bearing session that ends without the client's consent (keepalive timeout or gateway shutdown) closes
   its broker socket without MQTT DISCONNECT, so the broker publishes the stored will. An explicit client
   DISCONNECT stays graceful; on broker loss the broker publishes the will itself.
+- Every REGISTER and QoS 1 PUBLISH the gateway sends to the client (including wake-up flush and short-topic ones)
+  is recorded in a per-session retry set with its exact datagram, attempt count and due time, keyed by message
+  type and msg id. The session goroutine's single retry timer is armed for the earliest due entry (nil when the
+  set is empty). When it fires, each due entry is sent again unchanged (PUBLISH with DUP) and due moves one
+  `retry_interval` on; an entry that already used `retry_limit` retransmissions ends the session through the
+  client-loss teardown, without a broker PUBACK. REGACK and client PUBACK remove entries, and sleep clears the set.
+- A SUBSCRIBE or UNSUBSCRIBE forwarded to the broker records its send time. It is never retransmitted; if it is
+  still unanswered after `retry_interval` times `retry_limit`, the session ends through the broker-loss path
+  (DISCONNECT to the client, slot freed, broker connection closed without MQTT DISCONNECT). The same session retry
+  timer covers these deadlines and the client retry deadlines. Pending state lives in session maps, so a new
+  CONNECT with the same client id starts with none of it.
 - On shutdown (context cancel) every session ends its broker connection (MQTT DISCONNECT, or a bare close when
   it has a will), sends DISCONNECT to its client, and the socket closes. Closing the broker connection unblocks
   the reader; the session cancels it and waits for it to return before the session ends.
