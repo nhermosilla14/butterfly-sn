@@ -41,7 +41,13 @@ func startGateway(t *testing.T, brokerAddr string) *gateway {
 // startGatewayMax is startGateway with a given max_clients.
 func startGatewayMax(t *testing.T, brokerAddr string, maxClients int) *gateway {
 	t.Helper()
-	cfgPath := writeConfig(t, fmt.Sprintf("listen: 127.0.0.1:0\nbroker: %s\nmax_clients: %d\nlog_level: debug\n", brokerAddr, maxClients))
+	return startGatewayExtra(t, brokerAddr, maxClients, "")
+}
+
+// startGatewayExtra is startGatewayMax with extra raw YAML lines appended to the config, e.g. "gateway_id: 7\n".
+func startGatewayExtra(t *testing.T, brokerAddr string, maxClients int, extra string) *gateway {
+	t.Helper()
+	cfgPath := writeConfig(t, fmt.Sprintf("listen: 127.0.0.1:0\nbroker: %s\nmax_clients: %d\nlog_level: debug\n%s", brokerAddr, maxClients, extra))
 	ctx, cancel := context.WithCancel(context.Background())
 	g := &gateway{cancel: cancel, done: make(chan int, 1), stdout: &syncBuffer{}}
 	go func() { g.done <- app.Run(ctx, []string{"-config", cfgPath}, g.stdout) }()

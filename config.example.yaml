@@ -12,3 +12,13 @@ max_clients: 100
 
 # Log level: debug, info, warn or error. Default: info.
 log_level: info
+
+# Gateway id (1-255) sent in GWINFO replies and ADVERTISE. Default: 1.
+gateway_id: 1
+
+# Seconds between ADVERTISE messages (0-65535). Default: 900. 0 disables advertisement.
+# The first one is sent after one full interval.
+# advertise_interval: 900
+
+# UDP address (host:port) ADVERTISE is sent to. Default: 255.255.255.255 on the listen port (broadcast).
+# advertise_address: 255.255.255.255:5684

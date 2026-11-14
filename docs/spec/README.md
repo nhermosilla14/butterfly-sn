@@ -8,6 +8,7 @@ One file per functional area describing delivered behaviour, with the tests that
   subscriptions with wildcards and short names, gateway registration for downlink topics.
 - [will.md](will.md): will handshake and will publication.
 - [sleep.md](sleep.md): sleep entry and expiry, downlink buffering, wake-up flush.
+- [discovery.md](discovery.md): SEARCHGW/GWINFO and periodic ADVERTISE.
 - [configuration.md](configuration.md): YAML configuration keys, defaults and validation.
 
-Planned areas: discovery and operations.
+Planned areas: operations.

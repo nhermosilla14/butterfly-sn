@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -19,7 +21,15 @@ const (
 	brokerTimeout = 5 * time.Second
 	inboxSize     = 16
 	maxDatagram   = 65535
+	// maxDiscoveryDelay bounds the random wait before a GWINFO reply, so searching clients do not all answer at once.
+	maxDiscoveryDelay = 500 * time.Millisecond
 )
+
+// discoveryDelay picks the wait before a GWINFO reply. Tests replace it to avoid sleeping.
+var discoveryDelay = func() time.Duration { return rand.N(maxDiscoveryDelay) }
+
+// advertiseTick converts the configured interval to the ticker period. Tests replace it for sub-second ticks.
+var advertiseTick = func(seconds int) time.Duration { return time.Duration(seconds) * time.Second }
 
 // Gateway is a UDP listener bound by New and served by Run.
 type Gateway struct {
@@ -62,6 +72,10 @@ func (g *Gateway) Run(ctx context.Context) error {
 	stop := context.AfterFunc(ctx, func() { _ = g.conn.SetReadDeadline(time.Unix(1, 0)) })
 	defer stop()
 
+	if err := g.startAdvertise(ctx); err != nil {
+		return err
+	}
+
 	buf := make([]byte, maxDatagram)
 	for {
 		n, addr, err := g.conn.ReadFromUDP(buf)
@@ -75,11 +89,54 @@ func (g *Gateway) Run(ctx context.Context) error {
 	}
 }
 
+// startAdvertise starts the advertisement ticker when advertise_interval is above 0. The destination is
+// resolved once: advertise_address, or the broadcast address on the bound listen port. The first ADVERTISE
+// goes out after one full interval. The goroutine is part of g.wg and ends when ctx does.
+func (g *Gateway) startAdvertise(ctx context.Context) error {
+	secs := g.cfg.AdvertiseInterval
+	if secs <= 0 {
+		return nil
+	}
+	dest := g.cfg.AdvertiseAddress
+	if dest == "" {
+		dest = net.JoinHostPort("255.255.255.255", strconv.Itoa(g.conn.LocalAddr().(*net.UDPAddr).Port))
+	}
+	addr, err := net.ResolveUDPAddr("udp4", dest)
+	if err != nil {
+		return fmt.Errorf("gateway: advertise_address: %w", err)
+	}
+	msg := mqttsn.Advertise{GwID: byte(g.cfg.GatewayID), Duration: uint16(secs)}
+	ticker := time.NewTicker(advertiseTick(secs))
+	g.wg.Add(1)
+	go func() {
+		defer g.wg.Done()
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				g.sendTo(addr, msg)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return nil
+}
+
 // route handles one datagram. A valid packet of a type not implemented yet has msg nil and err ErrUnsupported.
 func (g *Gateway) route(ctx context.Context, data []byte, addr *net.UDPAddr) {
 	msg, err := mqttsn.Decode(data)
 	if err != nil && !errors.Is(err, mqttsn.ErrUnsupported) {
 		g.log.Debug("ignored malformed datagram", "from", addr, "error", err)
+		return
+	}
+	// Discovery is handled before session lookup, so it never creates or touches a session.
+	switch msg.(type) {
+	case mqttsn.Searchgw:
+		g.scheduleGwinfo(ctx, addr)
+		return
+	case mqttsn.Gwinfo, mqttsn.Advertise:
+		g.log.Debug("ignored discovery message", "from", addr, "type", fmt.Sprintf("%T", msg))
 		return
 	}
 	key := addr.String()
@@ -94,6 +151,23 @@ func (g *Gateway) route(ctx context.Context, data []byte, addr *net.UDPAddr) {
 	g.mu.Unlock()
 	// A nil msg (unsupported type) still reaches the session, where it counts as activity.
 	s.deliver(msg)
+}
+
+// scheduleGwinfo sends one unicast GWINFO to addr after a random delay. The radius of SEARCHGW is ignored.
+// The wait is part of g.wg and ends when ctx does, so Run closes the socket only after no reply is pending.
+// Searches are not rate-limited.
+func (g *Gateway) scheduleGwinfo(ctx context.Context, addr *net.UDPAddr) {
+	timer := time.NewTimer(discoveryDelay())
+	g.wg.Add(1)
+	go func() {
+		defer g.wg.Done()
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			g.sendTo(addr, mqttsn.Gwinfo{GwID: byte(g.cfg.GatewayID)})
+		case <-ctx.Done():
+		}
+	}()
 }
 
 // openSessionLocked starts a session for a CONNECT from an unknown sender. Any other packet from an
@@ -134,6 +208,9 @@ func (g *Gateway) removeSession(s *session) {
 }
 
 func (g *Gateway) sendTo(addr *net.UDPAddr, m mqttsn.Message) {
+	if g.conn == nil {
+		return
+	}
 	b, err := mqttsn.Encode(m)
 	if err != nil {
 		g.log.Error("encode failed", "error", err)
