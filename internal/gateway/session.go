@@ -369,6 +369,13 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 					s.loseBroker(log, err)
 					return
 				}
+			case mqttsn.WillTopicUpd:
+				// The broker cannot change the will of a live connection, so the update is refused. See docs/vision.md.
+				log.Warn("will update rejected", "type", "WILLTOPICUPD")
+				s.gw.sendTo(s.addr, mqttsn.WillTopicResp{ReturnCode: mqttsn.ReturnNotSupported})
+			case mqttsn.WillMsgUpd:
+				log.Warn("will update rejected", "type", "WILLMSGUPD")
+				s.gw.sendTo(s.addr, mqttsn.WillMsgResp{ReturnCode: mqttsn.ReturnNotSupported})
 			default:
 				log.Debug("ignored packet", "type", m)
 			}

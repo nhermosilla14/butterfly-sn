@@ -7,26 +7,30 @@ import (
 )
 
 const (
-	msgAdvertise    = 0x00
-	msgSearchgw     = 0x01
-	msgGwinfo       = 0x02
-	msgConnect      = 0x04
-	msgConnack      = 0x05
-	msgRegister     = 0x0A
-	msgRegack       = 0x0B
-	msgPublish      = 0x0C
-	msgPuback       = 0x0D
-	msgSubscribe    = 0x12
-	msgSuback       = 0x13
-	msgUnsubscribe  = 0x14
-	msgUnsuback     = 0x15
-	msgWillTopicReq = 0x06
-	msgWillTopic    = 0x07
-	msgWillMsgReq   = 0x08
-	msgWillMsg      = 0x09
-	msgPingreq      = 0x16
-	msgPingresp     = 0x17
-	msgDisconnect   = 0x18
+	msgAdvertise     = 0x00
+	msgSearchgw      = 0x01
+	msgGwinfo        = 0x02
+	msgConnect       = 0x04
+	msgConnack       = 0x05
+	msgRegister      = 0x0A
+	msgRegack        = 0x0B
+	msgPublish       = 0x0C
+	msgPuback        = 0x0D
+	msgSubscribe     = 0x12
+	msgSuback        = 0x13
+	msgUnsubscribe   = 0x14
+	msgUnsuback      = 0x15
+	msgWillTopicReq  = 0x06
+	msgWillTopic     = 0x07
+	msgWillMsgReq    = 0x08
+	msgWillMsg       = 0x09
+	msgWillTopicUpd  = 0x1A
+	msgWillTopicResp = 0x1B
+	msgWillMsgUpd    = 0x1C
+	msgWillMsgResp   = 0x1D
+	msgPingreq       = 0x16
+	msgPingresp      = 0x17
+	msgDisconnect    = 0x18
 
 	protocolID = 0x01
 
@@ -64,7 +68,7 @@ var (
 
 // Message is one decoded MQTT-SN message: Advertise, Searchgw, Gwinfo, Connect, Connack, Register, Regack,
 // Publish, Puback, Subscribe, Suback, Unsubscribe, Unsuback, Pingreq, Pingresp, Disconnect, WillTopicReq,
-// WillTopic, WillMsgReq or WillMsg.
+// WillTopic, WillMsgReq, WillMsg, WillTopicUpd, WillMsgUpd, WillTopicResp or WillMsgResp.
 type Message interface {
 	isMessage()
 }
@@ -198,31 +202,59 @@ type WillMsg struct {
 	Payload []byte
 }
 
-func (Advertise) isMessage()    {}
-func (Searchgw) isMessage()     {}
-func (Gwinfo) isMessage()       {}
-func (Connect) isMessage()      {}
-func (Connack) isMessage()      {}
-func (Register) isMessage()     {}
-func (Regack) isMessage()       {}
-func (Publish) isMessage()      {}
-func (Puback) isMessage()       {}
-func (Subscribe) isMessage()    {}
-func (Suback) isMessage()       {}
-func (Unsubscribe) isMessage()  {}
-func (Unsuback) isMessage()     {}
-func (Pingreq) isMessage()      {}
-func (Pingresp) isMessage()     {}
-func (Disconnect) isMessage()   {}
-func (WillTopicReq) isMessage() {}
-func (WillTopic) isMessage()    {}
-func (WillMsgReq) isMessage()   {}
-func (WillMsg) isMessage()      {}
+// WillTopicUpd asks the gateway to change the will topic. It has the same body as WillTopic, and the empty form
+// (Topic is "") is exactly two bytes, as for WillTopic.
+type WillTopicUpd struct {
+	QoS    byte
+	Retain bool
+	Topic  string
+}
+
+// WillMsgUpd asks the gateway to change the will payload. Payload may be empty.
+type WillMsgUpd struct {
+	Payload []byte
+}
+
+// WillTopicResp answers a WillTopicUpd with ReturnCode: accepted, or a rejection reason.
+type WillTopicResp struct {
+	ReturnCode byte
+}
+
+// WillMsgResp answers a WillMsgUpd with ReturnCode: accepted, or a rejection reason.
+type WillMsgResp struct {
+	ReturnCode byte
+}
+
+func (Advertise) isMessage()     {}
+func (Searchgw) isMessage()      {}
+func (Gwinfo) isMessage()        {}
+func (Connect) isMessage()       {}
+func (Connack) isMessage()       {}
+func (Register) isMessage()      {}
+func (Regack) isMessage()        {}
+func (Publish) isMessage()       {}
+func (Puback) isMessage()        {}
+func (Subscribe) isMessage()     {}
+func (Suback) isMessage()        {}
+func (Unsubscribe) isMessage()   {}
+func (Unsuback) isMessage()      {}
+func (Pingreq) isMessage()       {}
+func (Pingresp) isMessage()      {}
+func (Disconnect) isMessage()    {}
+func (WillTopicReq) isMessage()  {}
+func (WillTopic) isMessage()     {}
+func (WillMsgReq) isMessage()    {}
+func (WillMsg) isMessage()       {}
+func (WillTopicUpd) isMessage()  {}
+func (WillMsgUpd) isMessage()    {}
+func (WillTopicResp) isMessage() {}
+func (WillMsgResp) isMessage()   {}
 
 // Encode serialises m with its length header.
 func Encode(m Message) ([]byte, error) {
 	var typ byte
 	var body []byte
+	var err error
 	switch m := m.(type) {
 	case Advertise:
 		typ = msgAdvertise
@@ -316,27 +348,52 @@ func Encode(m Message) ([]byte, error) {
 		typ = msgWillTopicReq
 	case WillTopic:
 		typ = msgWillTopic
-		if m.Topic != "" {
-			if m.QoS > qosMask {
-				return nil, fmt.Errorf("mqttsn: invalid WILLTOPIC QoS %d", m.QoS)
-			}
-			flags := m.QoS << qosShift
-			if m.Retain {
-				flags |= flagRetain
-			}
-			body = append([]byte{flags}, m.Topic...)
-		} else if m.QoS != 0 || m.Retain {
-			return nil, fmt.Errorf("%w: empty will topic with QoS or retain", ErrMalformed)
+		body, err = encodeWillTopic("WILLTOPIC", m.QoS, m.Retain, m.Topic)
+		if err != nil {
+			return nil, err
 		}
 	case WillMsgReq:
 		typ = msgWillMsgReq
 	case WillMsg:
 		typ = msgWillMsg
 		body = m.Payload
+	case WillTopicUpd:
+		typ = msgWillTopicUpd
+		body, err = encodeWillTopic("WILLTOPICUPD", m.QoS, m.Retain, m.Topic)
+		if err != nil {
+			return nil, err
+		}
+	case WillMsgUpd:
+		typ = msgWillMsgUpd
+		body = m.Payload
+	case WillTopicResp:
+		typ = msgWillTopicResp
+		body = []byte{m.ReturnCode}
+	case WillMsgResp:
+		typ = msgWillMsgResp
+		body = []byte{m.ReturnCode}
 	default:
 		return nil, fmt.Errorf("mqttsn: cannot encode %T", m)
 	}
 	return withHeader(typ, body)
+}
+
+// encodeWillTopic builds the body shared by WILLTOPIC and WILLTOPICUPD. An empty topic gives an empty body.
+func encodeWillTopic(name string, qos byte, retain bool, topic string) ([]byte, error) {
+	if topic == "" {
+		if qos != 0 || retain {
+			return nil, fmt.Errorf("%w: empty %s topic with QoS or retain", ErrMalformed, name)
+		}
+		return nil, nil
+	}
+	if qos > qosMask {
+		return nil, fmt.Errorf("mqttsn: invalid %s QoS %d", name, qos)
+	}
+	flags := qos << qosShift
+	if retain {
+		flags |= flagRetain
+	}
+	return append([]byte{flags}, topic...), nil
 }
 
 func withHeader(typ byte, body []byte) ([]byte, error) {
@@ -500,17 +557,30 @@ func Decode(data []byte) (Message, error) {
 		}
 		return WillTopicReq{}, nil
 	case msgWillTopic:
-		switch len(body) {
-		case 0:
-			return WillTopic{}, nil
-		case 1:
-			return nil, ErrMalformed // flags without a topic name
+		m, err := decodeWillTopic(body)
+		if err != nil {
+			return nil, err
 		}
-		return WillTopic{
-			QoS:    (body[0] >> qosShift) & qosMask,
-			Retain: body[0]&flagRetain != 0,
-			Topic:  string(body[1:]),
-		}, nil
+		return WillTopic{QoS: m.QoS, Retain: m.Retain, Topic: m.Topic}, nil
+	case msgWillTopicUpd:
+		m, err := decodeWillTopic(body)
+		if err != nil {
+			return nil, err
+		}
+		return WillTopicUpd{QoS: m.QoS, Retain: m.Retain, Topic: m.Topic}, nil
+	case msgWillTopicResp:
+		if len(body) != 1 {
+			return nil, ErrMalformed
+		}
+		return WillTopicResp{ReturnCode: body[0]}, nil
+	case msgWillMsgResp:
+		if len(body) != 1 {
+			return nil, ErrMalformed
+		}
+		return WillMsgResp{ReturnCode: body[0]}, nil
+	case msgWillMsgUpd:
+		// Payload is copied: data aliases the caller's read buffer, which is reused.
+		return WillMsgUpd{Payload: append([]byte(nil), body...)}, nil
 	case msgWillMsgReq:
 		if len(body) != 0 {
 			return nil, ErrMalformed
@@ -521,4 +591,19 @@ func Decode(data []byte) (Message, error) {
 		return WillMsg{Payload: append([]byte(nil), body...)}, nil
 	}
 	return nil, ErrUnsupported
+}
+
+// decodeWillTopic parses the body shared by WILLTOPIC and WILLTOPICUPD. Flags without a topic are malformed.
+func decodeWillTopic(body []byte) (WillTopic, error) {
+	switch len(body) {
+	case 0:
+		return WillTopic{}, nil
+	case 1:
+		return WillTopic{}, ErrMalformed // flags without a topic name
+	}
+	return WillTopic{
+		QoS:    (body[0] >> qosShift) & qosMask,
+		Retain: body[0]&flagRetain != 0,
+		Topic:  string(body[1:]),
+	}, nil
 }

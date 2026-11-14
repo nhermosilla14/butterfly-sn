@@ -46,6 +46,14 @@ func TestRoundTrip(t *testing.T) {
 		WillMsg{Payload: []byte("offline")},
 		WillMsg{Payload: allBytes()},
 		WillMsg{},
+		WillTopicUpd{QoS: 2, Retain: true, Topic: "dev/status"},
+		WillTopicUpd{QoS: 0, Topic: "a"},
+		WillTopicUpd{},
+		WillMsgUpd{Payload: []byte("offline")},
+		WillMsgUpd{Payload: allBytes()},
+		WillMsgUpd{},
+		WillTopicResp{ReturnCode: ReturnNotSupported},
+		WillMsgResp{ReturnCode: ReturnAccepted},
 		Advertise{GwID: 0xFF, Duration: 0xFFFF},
 		Searchgw{},
 		Searchgw{Radius: 0xFF, HasRadius: true},
@@ -209,18 +217,21 @@ func TestSubscribeUnsubscribeDecodeBytes(t *testing.T) {
 
 func TestEncodeInvalid(t *testing.T) {
 	cases := map[string]Message{
-		"subscribe empty name":     Subscribe{MsgID: 1},
-		"subscribe qos 4":          Subscribe{QoS: 4, TopicName: "t"},
-		"subscribe topic type":     Subscribe{TopicIDType: 4, TopicName: "t"},
-		"suback qos 4":             Suback{QoS: 4},
-		"unsubscribe empty name":   Unsubscribe{MsgID: 1},
-		"unsubscribe topic type":   Unsubscribe{TopicIDType: 4, TopicName: "t"},
-		"register empty name":      Register{TopicID: 0, MsgID: 1},
-		"publish qos 4":            Publish{QoS: 4},
-		"publish topic type":       Publish{TopicIDType: 4},
-		"willtopic qos 4":          WillTopic{QoS: 4, Topic: "t"},
-		"willtopic empty with qos": WillTopic{QoS: 1},
-		"willtopic empty retain":   WillTopic{Retain: true},
+		"subscribe empty name":      Subscribe{MsgID: 1},
+		"subscribe qos 4":           Subscribe{QoS: 4, TopicName: "t"},
+		"subscribe topic type":      Subscribe{TopicIDType: 4, TopicName: "t"},
+		"suback qos 4":              Suback{QoS: 4},
+		"unsubscribe empty name":    Unsubscribe{MsgID: 1},
+		"unsubscribe topic type":    Unsubscribe{TopicIDType: 4, TopicName: "t"},
+		"register empty name":       Register{TopicID: 0, MsgID: 1},
+		"publish qos 4":             Publish{QoS: 4},
+		"publish topic type":        Publish{TopicIDType: 4},
+		"willtopic qos 4":           WillTopic{QoS: 4, Topic: "t"},
+		"willtopic empty with qos":  WillTopic{QoS: 1},
+		"willtopic empty retain":    WillTopic{Retain: true},
+		"willtopicupd qos 4":        WillTopicUpd{QoS: 4, Topic: "t"},
+		"willtopicupd empty qos":    WillTopicUpd{QoS: 1},
+		"willtopicupd empty retain": WillTopicUpd{Retain: true},
 	}
 	for name, m := range cases {
 		if _, err := Encode(m); err == nil {
@@ -291,6 +302,11 @@ func TestDecodeErrors(t *testing.T) {
 		"willtopicreq with body":       {0x03, 0x06, 0x00},
 		"willtopic flags only":         {0x03, 0x07, 0x20},
 		"willmsgreq with body":         {0x03, 0x08, 0x00},
+		"willtopicupd flags only":      {0x03, 0x1A, 0x20},
+		"willtopicresp no code":        {0x02, 0x1B},
+		"willtopicresp two bytes":      {0x04, 0x1B, 0x00, 0x00},
+		"willmsgresp no code":          {0x02, 0x1D},
+		"willmsgresp two bytes":        {0x04, 0x1D, 0x00, 0x00},
 	}
 	for name, b := range cases {
 		if _, err := Decode(b); !errors.Is(err, ErrMalformed) {
@@ -349,6 +365,34 @@ func TestWillTopicDecodeIgnoresUnusedFlags(t *testing.T) {
 	got, err := Decode([]byte{6, 0x07, 0x80 | 0x08 | 0x04 | 0x02 | 0x01, 'a', 'b', 'c'})
 	if err != nil || got != (WillTopic{Topic: "abc"}) {
 		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+func TestWillUpdateExactBytes(t *testing.T) {
+	// The empty WILLTOPICUPD is exactly two octets: length and type, no flags.
+	b, _ := Encode(WillTopicUpd{})
+	if !bytes.Equal(b, []byte{2, 0x1A}) {
+		t.Fatalf("empty WILLTOPICUPD got % x", b)
+	}
+	b, _ = Encode(WillTopicUpd{QoS: 1, Retain: true, Topic: "ab"})
+	if !bytes.Equal(b, []byte{5, 0x1A, 0x20 | 0x10, 'a', 'b'}) {
+		t.Fatalf("WILLTOPICUPD got % x", b)
+	}
+	b, _ = Encode(WillMsgUpd{Payload: []byte("xy")})
+	if !bytes.Equal(b, []byte{4, 0x1C, 'x', 'y'}) {
+		t.Fatalf("WILLMSGUPD got % x", b)
+	}
+	b, _ = Encode(WillMsgUpd{})
+	if !bytes.Equal(b, []byte{2, 0x1C}) {
+		t.Fatalf("empty WILLMSGUPD got % x", b)
+	}
+	b, _ = Encode(WillTopicResp{ReturnCode: ReturnNotSupported})
+	if !bytes.Equal(b, []byte{3, 0x1B, 0x03}) {
+		t.Fatalf("WILLTOPICRESP got % x", b)
+	}
+	b, _ = Encode(WillMsgResp{ReturnCode: ReturnNotSupported})
+	if !bytes.Equal(b, []byte{3, 0x1D, 0x03}) {
+		t.Fatalf("WILLMSGRESP got % x", b)
 	}
 }
 

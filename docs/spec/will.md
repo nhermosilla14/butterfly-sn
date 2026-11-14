@@ -35,10 +35,21 @@ itself. An explicit client DISCONNECT stays graceful and publishes nothing.
   - Will-less sessions keep MQTT DISCONNECT on timeout and shutdown.
 - Tests: TestWillPublishedOnClientTimeout, TestWillPublishedOnGatewayShutdown, TestWillPublishedOnBrokerLoss, TestWillNotPublishedOnExplicitDisconnect, TestEmptyWillTopicPublishesNothing, TestClientTimeoutWithWillClosesBrokerWithoutDisconnect, TestClientTimeoutWithoutWillSendsDisconnect, TestShutdownWithWillClosesBrokerWithoutDisconnect, TestShutdownWithoutWillSendsDisconnect, TestExplicitDisconnectWithWillSendsDisconnect
 
+### Will update requests
+WILLTOPICUPD (including the empty form that asks to delete the will) and WILLMSGUPD are answered with
+WILLTOPICRESP and WILLMSGRESP, return code Not supported. MQTT-SN 1.2 (6.4) says the stored will is overwritten and
+both messages are acknowledged, with a rejection reason allowed. The gateway cannot honour an overwrite, because
+MQTT 3.1.1 fixes the will at connect, so it rejects and leaves everything untouched. The will contents are never
+logged.
+- Criteria:
+  - Each update message gets its response with Not supported and the session stays usable: publish reaches the
+    broker, PINGREQ is answered, the broker connection is not reopened.
+  - The will given at CONNECT is still the one the broker publishes when the client is lost.
+  - During the will handshake and while the client sleeps the messages are ignored; during a wake-up flush they
+    are answered. From an unknown sender they get DISCONNECT, and a malformed one is ignored.
+- Tests: TestWillUpdateRejectedNotSupported, TestWillUpdateKeepsSessionAndWill, TestWillUpdateDuringWillHandshakeIgnored, TestWillUpdateAsleepIgnored, TestWillUpdateAnsweredDuringWakeFlush, TestWillUpdateFromUnknownSenderDisconnects, TestWillUpdateMalformedIgnored, TestWillUpdateExactBytes
+
 ## Not supported
-- WILLTOPICUPD and WILLMSGUPD; MQTT 3.1.1 cannot change a will in place, so a later intent must design the
-  reconnect path.
+- Applying will updates (WILLTOPICUPD, WILLMSGUPD): reconnecting the broker connection with a new will, or the
+  gateway publishing the will itself. Revisit only with a new intent and ADR.
 - Persisting will data across sessions (CleanSession=0); planned with sleep and session resumption.
-- Publishing wills when the gateway crashes or fails at startup; only timeout, broker loss and clean shutdown
-  are covered.
-- QoS 2 wills: the handshake refuses them with CONNACK Not supported.
