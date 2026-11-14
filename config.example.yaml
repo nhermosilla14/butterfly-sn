@@ -1,0 +1,14 @@
+# Example configuration for butterfly-sn. Copy it and run: butterfly-sn -config config.yaml
+# Unknown keys are rejected at startup.
+
+# UDP address the MQTT-SN clients send to (host:port).
+listen: 0.0.0.0:5684
+
+# MQTT broker TCP address (host:port). Each client gets its own connection to it.
+broker: 127.0.0.1:1883
+
+# Maximum number of simultaneous client sessions. Default: 100. Must be greater than 0.
+max_clients: 100
+
+# Log level: debug, info, warn or error. Default: info.
+log_level: info
