@@ -95,7 +95,7 @@ Malformed input never crashes the gateway and never gets a reply.
 - Tests: TestMalformedDatagramsIgnored, TestDecodeErrors, FuzzDecode
 
 ## Not supported
-- Will updates (WILLTOPICUPD, WILLMSGUPD) and will persistence across sessions; planned in later intents.
+- Will persistence across sessions; planned in a later intent. Will updates are rejected (see [will.md](will.md)).
 - Gateway-originated PINGREQ towards clients: supervision is passive, based on packets the client sends.
 - Persistent (non-clean) broker sessions: CONNECT is accepted, but the broker session is always clean.
 - Reconnection or session resumption for the same client id; the client sends CONNECT again.
