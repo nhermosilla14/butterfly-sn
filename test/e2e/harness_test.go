@@ -176,6 +176,20 @@ func (c *snClient) publishQoS0(topicID uint16, data []byte) {
 	c.send(mqttsn.Publish{TopicIDType: mqttsn.TopicIDNormal, TopicID: topicID, Data: data})
 }
 
+// subscribe sends SUBSCRIBE for a normal topic name or wildcard filter and returns the SUBACK.
+func (c *snClient) subscribe(msgID uint16, topic string, qos byte) mqttsn.Suback {
+	c.t.Helper()
+	c.send(mqttsn.Subscribe{QoS: qos, TopicIDType: mqttsn.TopicIDNormal, MsgID: msgID, TopicName: topic})
+	return expect[mqttsn.Suback](c.t, c, waitLong)
+}
+
+// unsubscribe sends UNSUBSCRIBE for a normal topic name or wildcard filter and returns the UNSUBACK.
+func (c *snClient) unsubscribe(msgID uint16, topic string) mqttsn.Unsuback {
+	c.t.Helper()
+	c.send(mqttsn.Unsubscribe{TopicIDType: mqttsn.TopicIDNormal, MsgID: msgID, TopicName: topic})
+	return expect[mqttsn.Unsuback](c.t, c, waitLong)
+}
+
 // connect performs CONNECT with a 60 s keepalive and asserts CONNACK Accepted.
 func connect(t *testing.T, c *snClient, clientID string) {
 	t.Helper()

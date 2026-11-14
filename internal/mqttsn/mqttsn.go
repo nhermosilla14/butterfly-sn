@@ -13,6 +13,10 @@ const (
 	msgRegack       = 0x0B
 	msgPublish      = 0x0C
 	msgPuback       = 0x0D
+	msgSubscribe    = 0x12
+	msgSuback       = 0x13
+	msgUnsubscribe  = 0x14
+	msgUnsuback     = 0x15
 	msgWillTopicReq = 0x06
 	msgWillTopic    = 0x07
 	msgWillMsgReq   = 0x08
@@ -55,8 +59,8 @@ var (
 	ErrUnsupported = errors.New("mqttsn: unsupported message type")
 )
 
-// Message is one decoded MQTT-SN message: Connect, Connack, Register, Regack, Publish, Puback, Pingreq,
-// Pingresp, Disconnect, WillTopicReq, WillTopic, WillMsgReq or WillMsg.
+// Message is one decoded MQTT-SN message: Connect, Connack, Register, Regack, Publish, Puback, Subscribe,
+// Suback, Unsubscribe, Unsuback, Pingreq, Pingresp, Disconnect, WillTopicReq, WillTopic, WillMsgReq or WillMsg.
 type Message interface {
 	isMessage()
 }
@@ -107,6 +111,36 @@ type Puback struct {
 	ReturnCode byte
 }
 
+// Subscribe is a SUBSCRIBE message. TopicName is a topic name, a topic filter or a 2-character short name,
+// as TopicIDType says; it is never empty. QoS is the requested QoS. MsgID is echoed by Suback.
+type Subscribe struct {
+	QoS         byte
+	TopicIDType byte
+	MsgID       uint16
+	TopicName   string
+}
+
+// Suback is a SUBACK message answering a Subscribe with the same MsgID. TopicID is only meaningful when
+// ReturnCode is ReturnAccepted.
+type Suback struct {
+	QoS        byte
+	TopicID    uint16
+	MsgID      uint16
+	ReturnCode byte
+}
+
+// Unsubscribe is an UNSUBSCRIBE message. TopicName is never empty, as for Subscribe.
+type Unsubscribe struct {
+	TopicIDType byte
+	MsgID       uint16
+	TopicName   string
+}
+
+// Unsuback is an UNSUBACK message answering an Unsubscribe with the same MsgID.
+type Unsuback struct {
+	MsgID uint16
+}
+
 // Pingreq is a PINGREQ message. ClientID is optional: active clients normally send none.
 type Pingreq struct {
 	ClientID string
@@ -147,6 +181,10 @@ func (Register) isMessage()     {}
 func (Regack) isMessage()       {}
 func (Publish) isMessage()      {}
 func (Puback) isMessage()       {}
+func (Subscribe) isMessage()    {}
+func (Suback) isMessage()       {}
+func (Unsubscribe) isMessage()  {}
+func (Unsuback) isMessage()     {}
 func (Pingreq) isMessage()      {}
 func (Pingresp) isMessage()     {}
 func (Disconnect) isMessage()   {}
@@ -200,6 +238,33 @@ func Encode(m Message) ([]byte, error) {
 	case Puback:
 		typ = msgPuback
 		body = []byte{byte(m.TopicID >> 8), byte(m.TopicID), byte(m.MsgID >> 8), byte(m.MsgID), m.ReturnCode}
+	case Subscribe:
+		if m.TopicName == "" {
+			return nil, fmt.Errorf("%w: empty topic name", ErrMalformed)
+		}
+		if m.QoS > qosMask || m.TopicIDType > topicMask {
+			return nil, fmt.Errorf("mqttsn: invalid SUBSCRIBE flags: QoS %d, TopicIDType %d", m.QoS, m.TopicIDType)
+		}
+		typ = msgSubscribe
+		body = append([]byte{m.TopicIDType | m.QoS<<qosShift, byte(m.MsgID >> 8), byte(m.MsgID)}, m.TopicName...)
+	case Suback:
+		if m.QoS > qosMask {
+			return nil, fmt.Errorf("mqttsn: invalid SUBACK QoS %d", m.QoS)
+		}
+		typ = msgSuback
+		body = []byte{m.QoS << qosShift, byte(m.TopicID >> 8), byte(m.TopicID), byte(m.MsgID >> 8), byte(m.MsgID), m.ReturnCode}
+	case Unsubscribe:
+		if m.TopicName == "" {
+			return nil, fmt.Errorf("%w: empty topic name", ErrMalformed)
+		}
+		if m.TopicIDType > topicMask {
+			return nil, fmt.Errorf("mqttsn: invalid UNSUBSCRIBE TopicIDType %d", m.TopicIDType)
+		}
+		typ = msgUnsubscribe
+		body = append([]byte{m.TopicIDType, byte(m.MsgID >> 8), byte(m.MsgID)}, m.TopicName...)
+	case Unsuback:
+		typ = msgUnsuback
+		body = []byte{byte(m.MsgID >> 8), byte(m.MsgID)}
 	case Pingreq:
 		typ = msgPingreq
 		body = []byte(m.ClientID)
@@ -324,6 +389,40 @@ func Decode(data []byte) (Message, error) {
 			MsgID:      uint16(body[2])<<8 | uint16(body[3]),
 			ReturnCode: body[4],
 		}, nil
+	case msgSubscribe:
+		if len(body) < 4 {
+			return nil, ErrMalformed
+		}
+		return Subscribe{
+			QoS:         (body[0] >> qosShift) & qosMask,
+			TopicIDType: body[0] & topicMask,
+			MsgID:       uint16(body[1])<<8 | uint16(body[2]),
+			TopicName:   string(body[3:]),
+		}, nil
+	case msgSuback:
+		if len(body) != 6 {
+			return nil, ErrMalformed
+		}
+		return Suback{
+			QoS:        (body[0] >> qosShift) & qosMask,
+			TopicID:    uint16(body[1])<<8 | uint16(body[2]),
+			MsgID:      uint16(body[3])<<8 | uint16(body[4]),
+			ReturnCode: body[5],
+		}, nil
+	case msgUnsubscribe:
+		if len(body) < 4 {
+			return nil, ErrMalformed
+		}
+		return Unsubscribe{
+			TopicIDType: body[0] & topicMask,
+			MsgID:       uint16(body[1])<<8 | uint16(body[2]),
+			TopicName:   string(body[3:]),
+		}, nil
+	case msgUnsuback:
+		if len(body) != 2 {
+			return nil, ErrMalformed
+		}
+		return Unsuback{MsgID: uint16(body[0])<<8 | uint16(body[1])}, nil
 	case msgPingreq:
 		return Pingreq{ClientID: string(body)}, nil
 	case msgPingresp:

@@ -28,6 +28,10 @@ type session struct {
 	// pending maps the msg id of each QoS 1 PUBLISH still awaiting the broker's PUBACK to its topic id.
 	// The broker packet id is the client's msg id, so no translation is needed.
 	pending map[uint16]uint16
+	// pendingSubs maps the msg id of each SUBSCRIBE awaiting the broker's SUBACK to the topic id to report.
+	pendingSubs map[uint16]uint16
+	// pendingUnsubs holds the msg id of each UNSUBSCRIBE awaiting the broker's UNSUBACK.
+	pendingUnsubs map[uint16]struct{}
 	// lastWrite is when the broker connection was last written successfully (CONNECT, PUBLISH, PINGREQ).
 	// Reads do not count. Only the session goroutine touches it.
 	lastWrite time.Time
@@ -91,6 +95,8 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 
 	log := s.gw.log.With("client", s.addr.String(), "client_id", c.ClientID)
 	s.pending = make(map[uint16]uint16)
+	s.pendingSubs = make(map[uint16]uint16)
+	s.pendingUnsubs = make(map[uint16]struct{})
 	if c.Will && !s.awaitWill(ctx, log) {
 		return
 	}
@@ -196,6 +202,16 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 				s.handleRegister(m, log)
 			case mqttsn.Publish:
 				if err := s.handlePublish(broker, m, log); err != nil {
+					s.loseBroker(log, err)
+					return
+				}
+			case mqttsn.Subscribe:
+				if err := s.handleSubscribe(broker, m, log); err != nil {
+					s.loseBroker(log, err)
+					return
+				}
+			case mqttsn.Unsubscribe:
+				if err := s.handleUnsubscribe(broker, m, log); err != nil {
 					s.loseBroker(log, err)
 					return
 				}
@@ -328,6 +344,13 @@ func (s *session) handleBrokerEvent(e mqtt.Event, log *slog.Logger) {
 		}
 		delete(s.pending, id)
 		s.gw.sendTo(s.addr, mqttsn.Puback{TopicID: topicID, MsgID: id, ReturnCode: mqttsn.ReturnAccepted})
+	case mqtt.EventSuback:
+		s.handleSuback(e, log)
+	case mqtt.EventUnsuback:
+		s.handleUnsuback(e, log)
+	case mqtt.EventPublish:
+		// Downlink delivery is not implemented yet; the message is dropped without payload logging.
+		log.Debug("ignored broker PUBLISH: downlink delivery not implemented")
 	case mqtt.EventPingresp:
 		s.pingOutstanding = false
 	}

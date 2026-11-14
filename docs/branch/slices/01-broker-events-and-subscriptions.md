@@ -1,6 +1,6 @@
 # Broker events and client subscriptions
 
-- Status: In progress
+- Status: Done
 - Intents: 20261114-downlink-pubsub
 - ADRs: 20261114-broker-event-stream-downlink, 20261114-downlink-delivery-and-topics
 - Depends on: none
@@ -20,7 +20,7 @@ wildcards. The broker reader now understands every broker packet the gateway nee
 - SUBSCRIBE an exact topic gets SUBACK Accepted with granted QoS and a nonzero topic id.
 - SUBSCRIBE a wildcard filter gets SUBACK Accepted with topic id 0.
 - UNSUBSCRIBE gets UNSUBACK with the client's msg id.
-- A broker refusal maps to SUBACK Congestion with QoS 0 and topic id 0.
+- A broker refusal maps to SUBACK Invalid topic id (0x02) with QoS 0 and topic id 0.
 - Covers criteria: subscribe, wildcard id, unsubscribe, broker subscription.
 
 ## Out of scope

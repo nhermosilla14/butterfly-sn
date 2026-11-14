@@ -1,8 +1,8 @@
 # Architecture
 
-Current state after the will intent (connect, registered-topic QoS 0 and QoS 1 publish, disconnect, bad-input
-handling, client timeouts, broker keepalive, broker-loss handling, will handshake and will publication).
-Decisions: `docs/adr/` and `docs/branch/adr/`.
+Current state after slice 01 of downlink pub/sub (connect, registered-topic QoS 0 and QoS 1 publish, disconnect,
+bad-input handling, client timeouts, broker keepalive, broker-loss handling, will handling, and client
+subscriptions). Decisions: `docs/adr/` and `docs/branch/adr/`.
 
 ```
  MQTT-SN client --UDP--> [ router ] --inbox--> [ session goroutine ] --TCP--> MQTT broker
@@ -21,7 +21,7 @@ Decisions: `docs/adr/` and `docs/branch/adr/`.
 | `cmd/butterfly-sn` | `main`: signals (SIGINT, SIGTERM), calls `internal/app` |
 | `internal/app` | Startup path shared by `main` and the e2e tests: flags, config, logging, run |
 | `internal/config` | YAML loading, defaults, validation (unknown keys rejected) |
-| `internal/mqttsn` | MQTT-SN packet codec, no I/O (CONNECT, CONNACK, REGISTER, REGACK, PUBLISH, PUBACK, PINGREQ, PINGRESP, DISCONNECT, WILLTOPICREQ, WILLTOPIC, WILLMSGREQ, WILLMSG) |
+| `internal/mqttsn` | MQTT-SN packet codec, no I/O (CONNECT, CONNACK, REGISTER, REGACK, PUBLISH, PUBACK, SUBSCRIBE, SUBACK, UNSUBSCRIBE, UNSUBACK, PINGREQ, PINGRESP, DISCONNECT, will messages) |
 | `internal/gateway` | UDP listener and router; one session goroutine, one broker reader goroutine and a normal-topic table per client |
 | `butterfly-mqtt-client/` | Standalone MQTT 3.1.1 client module (own `go.mod`, stdlib only, no gateway concepts), joined by a `replace` directive so it can move to its own repo |
 | `test/e2e` | End-to-end tests: gateway in-process, real Mosquitto in a container (testcontainers-go, Docker), plain MQTT observer |
@@ -47,6 +47,10 @@ Decisions: `docs/adr/` and `docs/branch/adr/`.
   msg id as the MQTT packet id on that client's dedicated connection. The session records the outstanding
   id together with its topic id and answer PUBACK Accepted to the client only after the broker PUBACK for
   that id arrives. Broker acknowledgements with an unknown id are logged and ignored.
+- SUBSCRIBE and UNSUBSCRIBE are forwarded on the client's broker connection with the client's msg id as the MQTT
+  packet id. SUBACK reports the granted QoS, the table id for an exact name and 0 for a wildcard; UNSUBACK copies
+  the msg id. The broker reader also reads SUBACK, UNSUBACK and PUBLISH events; downlink delivery is the next
+  slice.
 - Each session has one broker reader goroutine. It reads broker events in arrival order (PUBACK, PINGRESP,
   DISCONNECT, and later downlink traffic) and feeds them into the same serialized session stream, so the
   session goroutine never blocks on a synchronous broker read.
