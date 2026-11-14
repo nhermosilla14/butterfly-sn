@@ -13,7 +13,7 @@ their own reconnects, session state and message ids, which gets in the way of a 
 pull in dependencies.
 
 ## Decision
-Implement a small MQTT 3.1.1 packet codec and connection in `internal/mqtt`, standard library only. In scope
+The broker side speaks MQTT 3.1.1 only; MQTT 5 is not planned. Implement a small MQTT 3.1.1 packet codec and connection in `internal/mqtt`, standard library only. In scope
 now: CONNECT, CONNACK, PUBLISH, PUBACK, PINGREQ, PINGRESP, DISCONNECT. SUBSCRIBE, SUBACK, UNSUBSCRIBE,
 UNSUBACK and PUBREC/PUBREL/PUBCOMP are added by later intents. Packets are read from the TCP stream with full
 framing (the fixed header's variable-length size is read, then exactly that many bytes), fixing the old
@@ -22,7 +22,9 @@ a connect timeout and no credentials in this version (TLS and auth are non-goals
 
 ## Alternatives considered
 - `eclipse/paho.mqtt.golang` — auto-reconnect and internal session handling conflict with per-client translation; extra dependency.
-- `eclipse/paho.golang` (MQTT 5) — heavier, v5-centred, and the target brokers use 3.1.1.
+- `eclipse/paho.golang` (MQTT 5) — v5 only, manages packet ids itself, and the target brokers are used with 3.1.1.
+- `eclipse/paho.mqtt.golang/packets` or `mochi-mqtt/server/v2/packets` as a bare codec — rejected by the owner to avoid pulling in the dependency graphs of those modules.
+- `at-wat/mqtt-go` — small, but little adopted and its QoS 1 handling is unverified.
 
 ## Consequences
 No third-party MQTT dependency and full control of the flows. We own correctness of the codec, so it needs
