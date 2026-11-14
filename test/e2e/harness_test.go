@@ -176,10 +176,16 @@ func (c *snClient) publishQoS0(topicID uint16, data []byte) {
 	c.send(mqttsn.Publish{TopicIDType: mqttsn.TopicIDNormal, TopicID: topicID, Data: data})
 }
 
-// connect performs CONNECT and asserts CONNACK Accepted.
+// connect performs CONNECT with a 60 s keepalive and asserts CONNACK Accepted.
 func connect(t *testing.T, c *snClient, clientID string) {
 	t.Helper()
-	c.send(mqttsn.Connect{CleanSession: true, Duration: 60, ClientID: clientID})
+	connectWithDuration(t, c, clientID, 60)
+}
+
+// connectWithDuration performs CONNECT with the given keepalive and asserts CONNACK Accepted.
+func connectWithDuration(t *testing.T, c *snClient, clientID string, duration uint16) {
+	t.Helper()
+	c.send(mqttsn.Connect{CleanSession: true, Duration: duration, ClientID: clientID})
 	ack := expect[mqttsn.Connack](t, c, waitLong)
 	if ack.ReturnCode != mqttsn.ReturnAccepted {
 		t.Fatalf("CONNACK return code %d, want accepted", ack.ReturnCode)

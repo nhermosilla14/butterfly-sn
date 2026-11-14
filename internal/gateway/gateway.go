@@ -91,10 +91,7 @@ func (g *Gateway) route(ctx context.Context, data []byte, addr *net.UDPAddr) {
 		return
 	}
 	g.mu.Unlock()
-	if msg == nil {
-		g.log.Debug("ignored unsupported packet", "from", addr)
-		return
-	}
+	// A nil msg (unsupported type) still reaches the session, where it counts as activity.
 	s.deliver(msg)
 }
 
@@ -121,7 +118,7 @@ func (g *Gateway) openSessionLocked(ctx context.Context, key string, addr *net.U
 		g.sendTo(addr, mqttsn.Connack{ReturnCode: mqttsn.ReturnCongestion})
 		return
 	}
-	s := &session{gw: g, key: key, addr: addr, inbox: make(chan mqttsn.Message, inboxSize)}
+	s := &session{gw: g, key: key, addr: addr, inbox: make(chan inbound, inboxSize)}
 	g.sessions[key] = s
 	g.wg.Add(1)
 	go s.run(ctx, c)

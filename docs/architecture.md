@@ -1,8 +1,8 @@
 # Architecture
 
-Current state after slice 02 of session liveness (connect, registered-topic QoS 0 and QoS 1 publish, disconnect,
-bad-input handling, gateway-side broker keepalive and broker-loss handling). Decisions: `docs/adr/` and
-`docs/branch/adr/`.
+Current state after the session-liveness intent (connect, registered-topic QoS 0 and QoS 1 publish, disconnect,
+bad-input handling, client timeouts, gateway-side broker keepalive and broker-loss handling). Decisions:
+`docs/adr/` and `docs/branch/adr/`.
 
 ```
  MQTT-SN client --UDP--> [ router ] --inbox--> [ session goroutine ] --TCP--> MQTT broker
@@ -21,7 +21,7 @@ bad-input handling, gateway-side broker keepalive and broker-loss handling). Dec
 | `cmd/butterfly-sn` | `main`: signals (SIGINT, SIGTERM), calls `internal/app` |
 | `internal/app` | Startup path shared by `main` and the e2e tests: flags, config, logging, run |
 | `internal/config` | YAML loading, defaults, validation (unknown keys rejected) |
-| `internal/mqttsn` | MQTT-SN packet codec, no I/O (CONNECT, CONNACK, REGISTER, REGACK, PUBLISH, PUBACK, DISCONNECT) |
+| `internal/mqttsn` | MQTT-SN packet codec, no I/O (CONNECT, CONNACK, REGISTER, REGACK, PUBLISH, PUBACK, PINGREQ, PINGRESP, DISCONNECT) |
 | `internal/gateway` | UDP listener and router; one session goroutine, one broker reader goroutine and a normal-topic table per client |
 | `butterfly-mqtt-client/` | Standalone MQTT 3.1.1 client module (own `go.mod`, stdlib only, no gateway concepts), joined by a `replace` directive so it can move to its own repo |
 | `test/e2e` | End-to-end tests: gateway in-process, real Mosquitto in a container (testcontainers-go, Docker), plain MQTT observer |
@@ -49,6 +49,10 @@ bad-input handling, gateway-side broker keepalive and broker-loss handling). Dec
 - While a session is active, the gateway keeps its broker connection alive: when half the client's CONNECT
   duration passes without a broker write, it sends an MQTT PINGREQ and expects a PINGRESP. A keepalive of 0
   disables the pings and asks the broker for no keepalive check.
+- A client that sends no valid MQTT-SN packet for 1.5 times its CONNECT duration is declared lost: the gateway
+  removes the session, sends MQTT DISCONNECT to the broker, closes it and sends a best-effort MQTT-SN
+  DISCONNECT to the client. A keepalive of 0 disables this timer. PINGREQ from an active client is answered
+  with PINGRESP locally and counts as activity; the gateway does not originate PINGREQ to clients.
 - Any broker loss (read or write error, MQTT DISCONNECT, or a PINGREQ still unanswered when the next is due)
   sends a best-effort MQTT-SN DISCONNECT to the client and removes the session, so its slot is free again and
   pending QoS 1 acknowledgements are abandoned. The broker socket is closed without another MQTT DISCONNECT.

@@ -1,6 +1,6 @@
 # Expire silent clients and answer their keepalive
 
-- Status: In progress
+- Status: Done
 - Intents: 20261114-session-liveness
 - ADRs: 20261114-session-liveness-and-broker-loss
 - Depends on: 01, 02

@@ -23,7 +23,7 @@ type session struct {
 	gw     *Gateway
 	key    string
 	addr   *net.UDPAddr
-	inbox  chan mqttsn.Message
+	inbox  chan inbound
 	topics topicTable
 	// pending maps the msg id of each QoS 1 PUBLISH still awaiting the broker's PUBACK to its topic id.
 	// The broker packet id is the client's msg id, so no translation is needed.
@@ -33,6 +33,13 @@ type session struct {
 	lastWrite time.Time
 	// pingOutstanding is set while a PINGREQ awaits its PINGRESP.
 	pingOutstanding bool
+}
+
+// inbound is one client datagram handed to the session. msg is nil for a valid type this package does not
+// decode; it still counts as client activity. at is the arrival time, used by the inactivity timer.
+type inbound struct {
+	msg mqttsn.Message
+	at  time.Time
 }
 
 // brokerEvent is one result read from the broker connection: a broker packet, or the read error that
@@ -48,10 +55,16 @@ func keepaliveInterval(duration uint16) time.Duration {
 	return time.Duration(duration) * time.Second / 2
 }
 
+// inactivityLimit is how long the client may stay silent before it is declared lost: 1.5 times its CONNECT
+// duration. Zero disables the inactivity timer.
+func inactivityLimit(duration uint16) time.Duration {
+	return time.Duration(duration) * time.Second * 3 / 2
+}
+
 // deliver hands a datagram to the session without blocking the router.
 func (s *session) deliver(m mqttsn.Message) {
 	select {
-	case s.inbox <- m:
+	case s.inbox <- inbound{msg: m, at: time.Now()}:
 	default:
 		s.gw.log.Debug("session inbox full, dropping packet", "from", s.addr)
 	}
@@ -80,6 +93,8 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 	}
 	log.Info("client connected")
 	s.gw.sendTo(s.addr, mqttsn.Connack{ReturnCode: mqttsn.ReturnAccepted})
+	// The client's silence is counted from the CONNACK, so broker dialing does not use up its allowance.
+	lastClient := time.Now()
 
 	// The reader ends when the connection is closed (below) or its context is cancelled. Deferred
 	// calls run in reverse: close the connection, cancel the reader and wait for it to return.
@@ -100,6 +115,16 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 		keepalive = time.NewTimer(interval)
 		defer keepalive.Stop()
 		keepaliveDue = keepalive.C
+	}
+
+	// The inactivity timer is armed only when the client asked for a keepalive; a nil channel never fires.
+	limit := inactivityLimit(c.Duration)
+	var inactivity *time.Timer
+	var inactivityDue <-chan time.Time
+	if limit > 0 {
+		inactivity = time.NewTimer(limit)
+		defer inactivity.Stop()
+		inactivityDue = inactivity.C
 	}
 
 	for {
@@ -127,8 +152,25 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 				s.loseBroker(log, err)
 				return
 			}
-		case m := <-s.inbox:
-			switch m := m.(type) {
+		case <-inactivityDue:
+			// Packets queued before the deadline are handled first, so they can still refresh lastClient.
+			if len(s.inbox) > 0 {
+				inactivity.Reset(0)
+				continue
+			}
+			if idle := time.Since(lastClient); idle < limit {
+				inactivity.Reset(limit - idle)
+				continue
+			}
+			s.clientTimedOut(broker, log)
+			return
+		case in := <-s.inbox:
+			lastClient = in.at
+			switch m := in.msg.(type) {
+			case nil:
+				log.Debug("ignored unsupported packet")
+			case mqttsn.Pingreq:
+				s.gw.sendTo(s.addr, mqttsn.Pingresp{})
 			case mqttsn.Disconnect:
 				_ = broker.Disconnect()
 				s.gw.removeSession(s)
@@ -156,6 +198,17 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 func (s *session) loseBroker(log *slog.Logger, err error) {
 	log.Warn("broker connection lost, disconnecting client", "error", err)
 	s.gw.removeSession(s)
+	s.gw.sendTo(s.addr, mqttsn.Disconnect{})
+}
+
+// clientTimedOut ends the session after the client has been silent for longer than its inactivity limit. The
+// session is removed first, so the slot is free and a retry from the client gets a fresh session. Then MQTT
+// DISCONNECT goes to the broker, and a best-effort DISCONNECT to the client. The caller returns, which closes
+// the broker connection.
+func (s *session) clientTimedOut(broker *mqtt.Client, log *slog.Logger) {
+	log.Warn("client silent beyond its keepalive, disconnecting")
+	s.gw.removeSession(s)
+	_ = broker.Disconnect()
 	s.gw.sendTo(s.addr, mqttsn.Disconnect{})
 }
 
