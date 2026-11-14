@@ -98,6 +98,11 @@ keepalive, broker-loss handling, will handling, sleep with buffered downlink and
   set is empty). When it fires, each due entry is sent again unchanged (PUBLISH with DUP) and due moves one
   `retry_interval` on; an entry that already used `retry_limit` retransmissions ends the session through the
   client-loss teardown, without a broker PUBACK. REGACK and client PUBACK remove entries, and sleep clears the set.
+- A SUBSCRIBE or UNSUBSCRIBE forwarded to the broker records its send time. It is never retransmitted; if it is
+  still unanswered after `retry_interval` times `retry_limit`, the session ends through the broker-loss path
+  (DISCONNECT to the client, slot freed, broker connection closed without MQTT DISCONNECT). The same session retry
+  timer covers these deadlines and the client retry deadlines. Pending state lives in session maps, so a new
+  CONNECT with the same client id starts with none of it.
 - On shutdown (context cancel) every session ends its broker connection (MQTT DISCONNECT, or a bare close when
   it has a will), sends DISCONNECT to its client, and the socket closes. Closing the broker connection unblocks
   the reader; the session cancels it and waits for it to return before the session ends.

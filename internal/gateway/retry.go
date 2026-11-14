@@ -63,21 +63,58 @@ func (s *session) restoreParked() {
 	clear(s.parked)
 }
 
-// armRetry returns the channel of the retry timer, armed for the earliest due entry. It is nil when the set is
-// empty, so the run loop's case never fires. Each call replaces the previous timer.
+// armRetry returns the channel of the retry timer, armed for the earliest of the retry due times and the broker
+// request deadlines. It is nil when neither is pending, so the run loop's case never fires. Each call replaces the
+// previous timer.
 func (s *session) armRetry() <-chan time.Time {
 	s.stopRetryTimer()
-	if len(s.retries) == 0 {
-		return nil
-	}
 	var earliest time.Time
-	for _, e := range s.retries {
-		if earliest.IsZero() || e.due.Before(earliest) {
-			earliest = e.due
+	consider := func(t time.Time) {
+		if earliest.IsZero() || t.Before(earliest) {
+			earliest = t
 		}
+	}
+	for _, e := range s.retries {
+		consider(e.due)
+	}
+	budget := s.requestBudget()
+	for _, p := range s.pendingSubs {
+		consider(p.sent.Add(budget))
+	}
+	for _, p := range s.pendingUnsubs {
+		consider(p.sent.Add(budget))
+	}
+	if earliest.IsZero() {
+		return nil
 	}
 	s.retryTimer = time.NewTimer(time.Until(earliest))
 	return s.retryTimer.C
+}
+
+// requestBudget is how long the broker may leave a SUBSCRIBE or UNSUBSCRIBE unanswered: retry interval times retry
+// limit, the same budget a client gets for its retransmissions.
+func (s *session) requestBudget() time.Duration {
+	return s.gw.retryInterval * time.Duration(s.gw.retryLimit)
+}
+
+// checkBrokerRequests returns errBrokerSilent when a pending SUBSCRIBE or UNSUBSCRIBE has used its whole budget.
+// Requests are not retransmitted to the broker. The request is logged by type and msg id, never by topic.
+func (s *session) checkBrokerRequests(log *slog.Logger) error {
+	budget := s.requestBudget()
+	now := time.Now()
+	for id, p := range s.pendingSubs {
+		if now.Sub(p.sent) >= budget {
+			log.Warn("broker did not answer request in time", "type", "SUBSCRIBE", "msg_id", id)
+			return errBrokerSilent
+		}
+	}
+	for id, p := range s.pendingUnsubs {
+		if now.Sub(p.sent) >= budget {
+			log.Warn("broker did not answer request in time", "type", "UNSUBSCRIBE", "msg_id", id)
+			return errBrokerSilent
+		}
+	}
+	return nil
 }
 
 // stopRetryTimer stops the retry timer, if one is armed.

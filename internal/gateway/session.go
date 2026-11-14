@@ -16,6 +16,7 @@ import (
 var (
 	errBrokerDisconnect = errors.New("broker sent MQTT DISCONNECT")
 	errPingTimeout      = errors.New("broker PINGRESP missing")
+	errBrokerSilent     = errors.New("broker did not answer a SUBSCRIBE or UNSUBSCRIBE in time")
 )
 
 // session owns one MQTT-SN client and its broker connection. Only run touches session state.
@@ -30,9 +31,9 @@ type session struct {
 	pending map[uint16]uint16
 	// pendingSubs maps the msg id of each SUBSCRIBE awaiting the broker's SUBACK to what it reports. See pendingSub.
 	pendingSubs map[uint16]pendingSub
-	// pendingUnsubs maps the msg id of each UNSUBSCRIBE awaiting the broker's UNSUBACK to its short name, or to
-	// "" for a normal one.
-	pendingUnsubs map[uint16]string
+	// pendingUnsubs maps the msg id of each UNSUBSCRIBE awaiting the broker's UNSUBACK to what it reports. See
+	// pendingUnsub.
+	pendingUnsubs map[uint16]pendingUnsub
 	// shortSubs holds the two-character short names this session is subscribed to. They do not use the table.
 	shortSubs map[string]struct{}
 	// regMsgID is the last gateway REGISTER msg id issued; see nextRegMsgID.
@@ -69,8 +70,8 @@ type session struct {
 	// preAcked holds the gateway msg ids of the QoS 1 PUBLISHes sent on wake. The broker was acknowledged when
 	// each one was buffered, so the client's PUBACK for these must not produce a second broker PUBACK.
 	preAcked map[uint16]struct{}
-	// retries holds the gateway REGISTERs and QoS 1 PUBLISHes to the client awaiting their replies, and
-	// retryTimer fires at the earliest due one. See retry.go.
+	// retries holds the gateway REGISTERs and QoS 1 PUBLISHes to the client awaiting their replies. retryTimer
+	// fires at the earliest due entry or broker request deadline. See retry.go.
 	retries    map[retryKey]*retryEntry
 	retryTimer *time.Timer
 	// parked holds the QoS 1 PUBLISHes awaiting PUBACK while the client sleeps. See clearRetries.
@@ -132,7 +133,7 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 	log := s.gw.log.With("client", s.addr.String(), "client_id", c.ClientID)
 	s.pending = make(map[uint16]uint16)
 	s.pendingSubs = make(map[uint16]pendingSub)
-	s.pendingUnsubs = make(map[uint16]string)
+	s.pendingUnsubs = make(map[uint16]pendingUnsub)
 	s.shortSubs = make(map[string]struct{})
 	s.pendingRegs = make(map[uint16]*pendingReg)
 	s.regByTopic = make(map[string]uint16)
@@ -271,6 +272,10 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 		case <-retryDue:
 			if s.retransmitDue(log) {
 				s.clientTimedOut(broker)
+				return
+			}
+			if err := s.checkBrokerRequests(log); err != nil {
+				s.loseBroker(log, err)
 				return
 			}
 		case in := <-s.inbox:

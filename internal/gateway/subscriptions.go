@@ -50,6 +50,15 @@ func (s *session) trackedShortNames() map[string]struct{} {
 type pendingSub struct {
 	topicID uint16
 	short   string
+	// sent is when the SUBSCRIBE was written to the broker. See checkBrokerRequests.
+	sent time.Time
+}
+
+// pendingUnsub is an UNSUBSCRIBE awaiting the broker's UNSUBACK: its short name, or "" for a normal one, and when
+// it was written to the broker.
+type pendingUnsub struct {
+	short string
+	sent  time.Time
 }
 
 // handleSubscribe forwards a SUBSCRIBE to the broker on this session's connection. QoS 2 and predefined topic ids
@@ -105,7 +114,8 @@ func (s *session) handleSubscribe(broker *mqtt.Client, m mqttsn.Subscribe, log *
 	if err := broker.SubscribeRequest(m.TopicName, m.QoS, m.MsgID); err != nil {
 		return fmt.Errorf("SUBSCRIBE: %w", err)
 	}
-	s.lastWrite = time.Now()
+	pend.sent = time.Now()
+	s.lastWrite = pend.sent
 	s.pendingSubs[m.MsgID] = pend
 	return nil
 }
@@ -169,8 +179,9 @@ func (s *session) handleUnsubscribe(broker *mqtt.Client, m mqttsn.Unsubscribe, l
 	if err := broker.UnsubscribeRequest(m.TopicName, m.MsgID); err != nil {
 		return fmt.Errorf("UNSUBSCRIBE: %w", err)
 	}
-	s.lastWrite = time.Now()
-	s.pendingUnsubs[m.MsgID] = short
+	sent := time.Now()
+	s.lastWrite = sent
+	s.pendingUnsubs[m.MsgID] = pendingUnsub{short: short, sent: sent}
 	return nil
 }
 
@@ -178,14 +189,14 @@ func (s *session) handleUnsubscribe(broker *mqtt.Client, m mqttsn.Unsubscribe, l
 // unknown packet id is logged and ignored.
 func (s *session) handleUnsuback(e mqtt.Event, log *slog.Logger) {
 	id := e.PacketID
-	short, ok := s.pendingUnsubs[id]
+	pend, ok := s.pendingUnsubs[id]
 	if !ok {
 		log.Warn("ignored broker UNSUBACK for unknown packet id", "packet_id", id)
 		return
 	}
 	delete(s.pendingUnsubs, id)
-	if short != "" {
-		delete(s.shortSubs, short)
+	if pend.short != "" {
+		delete(s.shortSubs, pend.short)
 	}
 	s.gw.sendTo(s.addr, mqttsn.Unsuback{MsgID: id})
 }

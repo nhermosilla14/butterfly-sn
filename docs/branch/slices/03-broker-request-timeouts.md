@@ -3,6 +3,7 @@
 - Intents: 20261114-broker-outage-inflight-cleanup
 - ADRs: 20261114-gateway-retry-and-pending-timeouts
 - Depends on: 01
+- Status: Done
 
 ## Scope
 A SUBSCRIBE or UNSUBSCRIBE the broker does not answer within `retry_interval` times `retry_limit` ends the
