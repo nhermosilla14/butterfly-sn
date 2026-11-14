@@ -1,7 +1,8 @@
 # Architecture
 
-Current state after slice 03 (connect, registered-topic QoS 0 and QoS 1 publish, disconnect and bad-input
-handling). Decisions: `docs/adr/` and `docs/branch/adr/`.
+Current state after the session-liveness intent (connect, registered-topic QoS 0 and QoS 1 publish, disconnect,
+bad-input handling, client timeouts, gateway-side broker keepalive and broker-loss handling). Decisions:
+`docs/adr/` and `docs/branch/adr/`.
 
 ```
  MQTT-SN client --UDP--> [ router ] --inbox--> [ session goroutine ] --TCP--> MQTT broker
@@ -10,7 +11,8 @@ handling). Decisions: `docs/adr/` and `docs/branch/adr/`.
                                                 |      +-- PUBLISH (writes) --+
                                                 |                             |
                                                 +------- broker reader <------+
-                                                         (PUBACKs and errors)
+                                                         (PUBACK, PINGRESP,
+                                                          DISCONNECT, errors)
 ```
 
 ## Packages
@@ -19,7 +21,7 @@ handling). Decisions: `docs/adr/` and `docs/branch/adr/`.
 | `cmd/butterfly-sn` | `main`: signals (SIGINT, SIGTERM), calls `internal/app` |
 | `internal/app` | Startup path shared by `main` and the e2e tests: flags, config, logging, run |
 | `internal/config` | YAML loading, defaults, validation (unknown keys rejected) |
-| `internal/mqttsn` | MQTT-SN packet codec, no I/O (CONNECT, CONNACK, REGISTER, REGACK, PUBLISH, PUBACK, DISCONNECT) |
+| `internal/mqttsn` | MQTT-SN packet codec, no I/O (CONNECT, CONNACK, REGISTER, REGACK, PUBLISH, PUBACK, PINGREQ, PINGRESP, DISCONNECT) |
 | `internal/gateway` | UDP listener and router; one session goroutine, one broker reader goroutine and a normal-topic table per client |
 | `butterfly-mqtt-client/` | Standalone MQTT 3.1.1 client module (own `go.mod`, stdlib only, no gateway concepts), joined by a `replace` directive so it can move to its own repo |
 | `test/e2e` | End-to-end tests: gateway in-process, real Mosquitto in a container (testcontainers-go, Docker), plain MQTT observer |
@@ -41,9 +43,19 @@ handling). Decisions: `docs/adr/` and `docs/branch/adr/`.
   msg id as the MQTT packet id on that client's dedicated connection. The session records the outstanding
   id together with its topic id and answer PUBACK Accepted to the client only after the broker PUBACK for
   that id arrives. Broker acknowledgements with an unknown id are logged and ignored.
-- Each session has one broker reader goroutine. It reads broker PUBACKs (and later downlink traffic) and
-  feeds them as events into the same serialized session stream, so the session goroutine never blocks on a
-  synchronous broker read.
+- Each session has one broker reader goroutine. It reads broker events in arrival order (PUBACK, PINGRESP,
+  DISCONNECT, and later downlink traffic) and feeds them into the same serialized session stream, so the
+  session goroutine never blocks on a synchronous broker read.
+- While a session is active, the gateway keeps its broker connection alive: when half the client's CONNECT
+  duration passes without a broker write, it sends an MQTT PINGREQ and expects a PINGRESP. A keepalive of 0
+  disables the pings and asks the broker for no keepalive check.
+- A client that sends no valid MQTT-SN packet for 1.5 times its CONNECT duration is declared lost: the gateway
+  removes the session, sends MQTT DISCONNECT to the broker, closes it and sends a best-effort MQTT-SN
+  DISCONNECT to the client. A keepalive of 0 disables this timer. PINGREQ from an active client is answered
+  with PINGRESP locally and counts as activity; the gateway does not originate PINGREQ to clients.
+- Any broker loss (read or write error, MQTT DISCONNECT, or a PINGREQ still unanswered when the next is due)
+  sends a best-effort MQTT-SN DISCONNECT to the client and removes the session, so its slot is free again and
+  pending QoS 1 acknowledgements are abandoned. The broker socket is closed without another MQTT DISCONNECT.
 - DISCONNECT sends MQTT DISCONNECT to the broker, replies DISCONNECT, and removes the session.
 - On shutdown (context cancel) every session disconnects from the broker, sends DISCONNECT to its client, and the
   socket closes. Closing the broker connection unblocks the reader; the session cancels it and waits for it to

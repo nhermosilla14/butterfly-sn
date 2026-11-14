@@ -13,6 +13,8 @@ const (
 	msgRegack     = 0x0B
 	msgPublish    = 0x0C
 	msgPuback     = 0x0D
+	msgPingreq    = 0x16
+	msgPingresp   = 0x17
 	msgDisconnect = 0x18
 
 	protocolID = 0x01
@@ -49,7 +51,8 @@ var (
 	ErrUnsupported = errors.New("mqttsn: unsupported message type")
 )
 
-// Message is one decoded MQTT-SN message: Connect, Connack, Register, Regack, Publish, Puback or Disconnect.
+// Message is one decoded MQTT-SN message: Connect, Connack, Register, Regack, Publish, Puback, Pingreq,
+// Pingresp or Disconnect.
 type Message interface {
 	isMessage()
 }
@@ -100,6 +103,14 @@ type Puback struct {
 	ReturnCode byte
 }
 
+// Pingreq is a PINGREQ message. ClientID is optional: active clients normally send none.
+type Pingreq struct {
+	ClientID string
+}
+
+// Pingresp is a PINGRESP message, which has no body.
+type Pingresp struct{}
+
 // Disconnect is a DISCONNECT message. Duration is present only when HasDuration is set (sleep request).
 type Disconnect struct {
 	Duration    uint16
@@ -112,6 +123,8 @@ func (Register) isMessage()   {}
 func (Regack) isMessage()     {}
 func (Publish) isMessage()    {}
 func (Puback) isMessage()     {}
+func (Pingreq) isMessage()    {}
+func (Pingresp) isMessage()   {}
 func (Disconnect) isMessage() {}
 
 // Encode serialises m with its length header.
@@ -159,6 +172,11 @@ func Encode(m Message) ([]byte, error) {
 	case Puback:
 		typ = msgPuback
 		body = []byte{byte(m.TopicID >> 8), byte(m.TopicID), byte(m.MsgID >> 8), byte(m.MsgID), m.ReturnCode}
+	case Pingreq:
+		typ = msgPingreq
+		body = []byte(m.ClientID)
+	case Pingresp:
+		typ = msgPingresp
 	case Disconnect:
 		typ = msgDisconnect
 		if m.HasDuration {
@@ -257,6 +275,13 @@ func Decode(data []byte) (Message, error) {
 			MsgID:      uint16(body[2])<<8 | uint16(body[3]),
 			ReturnCode: body[4],
 		}, nil
+	case msgPingreq:
+		return Pingreq{ClientID: string(body)}, nil
+	case msgPingresp:
+		if len(body) != 0 {
+			return nil, ErrMalformed
+		}
+		return Pingresp{}, nil
 	case msgDisconnect:
 		switch len(body) {
 		case 0:

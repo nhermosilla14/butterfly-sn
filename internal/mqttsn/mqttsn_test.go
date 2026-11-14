@@ -28,6 +28,9 @@ func TestRoundTrip(t *testing.T) {
 		Publish{QoS: 1, TopicID: 0xFFFE, MsgID: 0xBEEF, Data: []byte("q1")},
 		Puback{TopicID: 0xFFFE, MsgID: 0xBEEF, ReturnCode: ReturnAccepted},
 		Puback{TopicID: 1, MsgID: 1, ReturnCode: ReturnInvalidTopicID},
+		Pingreq{},
+		Pingreq{ClientID: "sensor-1"},
+		Pingresp{},
 	}
 	for _, m := range cases {
 		b, err := Encode(m)
@@ -181,6 +184,8 @@ func TestDecodeErrors(t *testing.T) {
 		"puback short":                 {0x06, 0x0D, 0, 1, 0, 1},
 		"puback long":                  {0x08, 0x0D, 0, 1, 0, 1, 0, 0},
 		"puback no body":               {0x02, 0x0D},
+		"pingresp with body":           {0x03, 0x17, 0x00},
+		"pingresp long body":           {0x04, 0x17, 'a', 'b'},
 	}
 	for name, b := range cases {
 		if _, err := Decode(b); !errors.Is(err, ErrMalformed) {
@@ -189,9 +194,31 @@ func TestDecodeErrors(t *testing.T) {
 	}
 }
 
+func TestPingEncodeBytes(t *testing.T) {
+	b, _ := Encode(Pingreq{})
+	if !bytes.Equal(b, []byte{2, 0x16}) {
+		t.Fatalf("PINGREQ got % x", b)
+	}
+	b, _ = Encode(Pingreq{ClientID: "ab"})
+	if !bytes.Equal(b, []byte{4, 0x16, 'a', 'b'}) {
+		t.Fatalf("PINGREQ with client id got % x", b)
+	}
+	b, _ = Encode(Pingresp{})
+	if !bytes.Equal(b, []byte{2, 0x17}) {
+		t.Fatalf("PINGRESP got % x", b)
+	}
+}
+
+func TestPingDecodeEmptyClientID(t *testing.T) {
+	got, err := Decode([]byte{2, 0x16})
+	if err != nil || got != (Pingreq{}) {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
 func TestDecodeUnsupported(t *testing.T) {
-	// PINGREQ (0x16) is valid MQTT-SN but not implemented yet.
-	if _, err := Decode([]byte{0x02, 0x16}); !errors.Is(err, ErrUnsupported) {
+	// SUBSCRIBE (0x12) is valid MQTT-SN but not implemented yet.
+	if _, err := Decode([]byte{0x02, 0x12}); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("got %v, want ErrUnsupported", err)
 	}
 }
@@ -201,6 +228,7 @@ func FuzzDecode(f *testing.F) {
 		Connect{ClientID: "a"}, Connack{}, Disconnect{Duration: 1, HasDuration: true},
 		Register{TopicID: 0, MsgID: 1, TopicName: "a/b"}, Regack{TopicID: 1, MsgID: 1},
 		Publish{QoS: 1, TopicID: 1, MsgID: 2, Data: []byte("x")}, Puback{TopicID: 1, MsgID: 2},
+		Pingreq{}, Pingreq{ClientID: "a"}, Pingresp{},
 	} {
 		b, _ := Encode(m)
 		f.Add(b)

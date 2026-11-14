@@ -41,6 +41,8 @@ Go implementation. Never copy code from the Paho sources (EPL/EDL) into this rep
 ## Conventions
 - Tooling: Go (`go test ./...`, `gofmt`, `go vet`); e2e tests need Docker (testcontainers-go); build and CI helpers are decided in ADRs and
   recorded here when they exist.
+- E2E tests use unique client ids and topic names per run: the shared broker keeps state and logs across
+  `-count` runs, so fixed names make repeated runs fail.
 - Git workflow: git-flow (skill `git-flow-workflow`). Integration branch: `develop`; `main` holds releases.
 - Workflow: branch names `feature/<short-title>` or `fix/<short-title>` from `develop`; imperative commit subjects.
   No author emails or names here; each contributor commits with their own git identity. Names appear

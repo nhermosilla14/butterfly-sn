@@ -44,7 +44,7 @@ func (c *Client) Publish(topic string, payload []byte, retain bool) error {
 }
 
 // PublishQoS1 sends a QoS 1 PUBLISH with packet identifier id, which must not be 0. dup sets the DUP flag.
-// It returns once the bytes are written; the broker's PUBACK arrives later and is read with ReadPuback.
+// It returns once the bytes are written; the broker's PUBACK arrives later and is read with ReadEvent.
 // The caller chooses id and keeps track of which ids are outstanding.
 func (c *Client) PublishQoS1(topic string, payload []byte, retain, dup bool, id uint16) error {
 	if topic == "" || strings.ContainsAny(topic, "+#") {
@@ -73,17 +73,47 @@ func (c *Client) PublishQoS1(topic string, payload []byte, retain, dup bool, id 
 	return c.write(pkt)
 }
 
-// ReadPuback waits for the next PUBACK from the broker and returns its packet identifier, bounded by ctx.
-// Any other packet is an error. It must not run concurrently with ReadPublish or Subscribe.
-func (c *Client) ReadPuback(ctx context.Context) (uint16, error) {
+// Pingreq sends an MQTT PINGREQ. The broker answers with a PINGRESP, which is read with ReadEvent.
+func (c *Client) Pingreq() error {
+	pkt, err := packet(typePingreq, 0, nil)
+	if err != nil {
+		return err
+	}
+	return c.write(pkt)
+}
+
+// EventKind tells which broker packet an Event holds.
+type EventKind int
+
+const (
+	EventPuback     EventKind = iota + 1 // PUBACK; Event.PacketID is set
+	EventPingresp                        // PINGRESP
+	EventDisconnect                      // MQTT DISCONNECT: the broker closed the MQTT session
+)
+
+// Event is one broker packet returned by ReadEvent. PacketID is only meaningful for EventPuback.
+type Event struct {
+	Kind     EventKind
+	PacketID uint16
+}
+
+// ReadEvent waits for the next broker packet that ReadEvent handles and returns it in arrival order,
+// bounded by ctx. Packets are validated strictly: any other type, or a malformed PUBACK, PINGRESP or
+// DISCONNECT, is an error wrapping ErrMalformedPacket. It must not run concurrently with ReadPublish or Subscribe.
+func (c *Client) ReadEvent(ctx context.Context) (Event, error) {
 	p, err := c.readPacket(ctx)
 	if err != nil {
-		return 0, err
+		return Event{}, err
 	}
-	if p.Type != typePuback || p.Flags != 0 || len(p.Body) != 2 {
-		return 0, fmt.Errorf("%w: expected PUBACK, got packet type %d", ErrMalformedPacket, p.Type)
+	switch {
+	case p.Type == typePuback && p.Flags == 0 && len(p.Body) == 2:
+		return Event{Kind: EventPuback, PacketID: uint16(p.Body[0])<<8 | uint16(p.Body[1])}, nil
+	case p.Type == typePingresp && p.Flags == 0 && len(p.Body) == 0:
+		return Event{Kind: EventPingresp}, nil
+	case p.Type == typeDisconnect && p.Flags == 0 && len(p.Body) == 0:
+		return Event{Kind: EventDisconnect}, nil
 	}
-	return uint16(p.Body[0])<<8 | uint16(p.Body[1]), nil
+	return Event{}, fmt.Errorf("%w: unexpected broker packet type %d flags %#x length %d", ErrMalformedPacket, p.Type, p.Flags, len(p.Body))
 }
 
 // Subscribe subscribes to filter at QoS 0 and waits for its SUBACK, bounded by ctx. It is meant for

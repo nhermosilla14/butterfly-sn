@@ -209,13 +209,33 @@ func TestPublishQoS1WriteError(t *testing.T) {
 	}
 }
 
-func TestReadPubackReturnsIDAfterBrokerAck(t *testing.T) {
+func TestPingreqEncodesPacket(t *testing.T) {
+	got := make(chan Packet, 1)
+	c := serve(t, func(srv net.Conn) {
+		p, err := ReadPacket(srv)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		got <- p
+	})
+	if err := c.Pingreq(); err != nil {
+		t.Fatal(err)
+	}
+	if p := <-got; p.Type != typePingreq || p.Flags != 0 || len(p.Body) != 0 {
+		t.Fatalf("PINGREQ: type %d flags %#x body % x", p.Type, p.Flags, p.Body)
+	}
+}
+
+func TestReadEventReturnsBrokerPacketsInArrivalOrder(t *testing.T) {
 	published := make(chan struct{})
 	c := serve(t, func(srv net.Conn) {
 		_, _ = ReadPacket(srv)
 		close(published)
 		ack, _ := packet(typePuback, 0, []byte{0x12, 0x34})
-		_, _ = srv.Write(ack)
+		pingresp, _ := packet(typePingresp, 0, nil)
+		disconnect, _ := packet(typeDisconnect, 0, nil)
+		_, _ = srv.Write(append(append(ack, pingresp...), disconnect...))
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -223,25 +243,37 @@ func TestReadPubackReturnsIDAfterBrokerAck(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-published
-	id, err := c.ReadPuback(ctx)
-	if err != nil || id != 0x1234 {
-		t.Fatalf("ReadPuback: id %#x, %v; want 0x1234", id, err)
+	want := []Event{
+		{Kind: EventPuback, PacketID: 0x1234},
+		{Kind: EventPingresp},
+		{Kind: EventDisconnect},
+	}
+	for _, w := range want {
+		got, err := c.ReadEvent(ctx)
+		if err != nil || got != w {
+			t.Fatalf("ReadEvent: %+v, %v; want %+v", got, err, w)
+		}
 	}
 }
 
-func TestReadPubackMalformed(t *testing.T) {
+func TestReadEventMalformed(t *testing.T) {
 	cases := map[string][]byte{
-		"wrong type": {0x30, 0x02, 0, 1},
-		"bad flags":  {0x41, 0x02, 0, 1},
-		"short body": {0x40, 0x01, 0},
-		"long body":  {0x40, 0x03, 0, 1, 0},
+		"publish type":     {0x30, 0x02, 0, 1},
+		"puback flags":     {0x41, 0x02, 0, 1},
+		"puback short":     {0x40, 0x01, 0},
+		"puback long":      {0x40, 0x03, 0, 1, 0},
+		"pingresp flags":   {0xD1, 0x00},
+		"pingresp body":    {0xD0, 0x01, 0},
+		"disconnect flags": {0xE1, 0x00},
+		"disconnect body":  {0xE0, 0x01, 0},
+		"connack":          {0x20, 0x02, 0, 0},
 	}
 	for name, raw := range cases {
 		c := serve(t, func(srv net.Conn) {
 			_, _ = srv.Write(raw)
 		})
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_, err := c.ReadPuback(ctx)
+		_, err := c.ReadEvent(ctx)
 		cancel()
 		if !errors.Is(err, ErrMalformedPacket) {
 			t.Errorf("%s: got %v, want ErrMalformedPacket", name, err)
@@ -249,11 +281,11 @@ func TestReadPubackMalformed(t *testing.T) {
 	}
 }
 
-func TestReadPubackCancelled(t *testing.T) {
+func TestReadEventCancelled(t *testing.T) {
 	c := serve(t, func(srv net.Conn) {})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := c.ReadPuback(ctx); !errors.Is(err, context.Canceled) {
+	if _, err := c.ReadEvent(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v, want context.Canceled", err)
 	}
 }

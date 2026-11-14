@@ -14,6 +14,8 @@ const (
 	typeSuback     = 9
 	typeConnect    = 1
 	typeConnack    = 2
+	typePingreq    = 12
+	typePingresp   = 13
 	typeDisconnect = 14
 
 	flagRetain    = 0x01
