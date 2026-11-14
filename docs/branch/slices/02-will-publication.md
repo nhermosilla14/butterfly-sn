@@ -1,5 +1,6 @@
 # Publish the will on abnormal loss and shutdown
 
+- Status: In progress
 - Intents: 20261114-will-handshake-and-publication
 - ADRs: 20261114-will-publication-triggers, 20261114-will-handshake-and-broker-mapping
 - Depends on: 01
