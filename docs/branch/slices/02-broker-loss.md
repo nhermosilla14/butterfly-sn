@@ -1,6 +1,6 @@
 # Tell the client when the broker connection is lost
 
-- Status: In progress
+- Status: Done
 - Intents: 20261114-session-liveness
 - ADRs: 20261114-session-liveness-and-broker-loss, 20261114-broker-event-reader-api
 - Depends on: 01

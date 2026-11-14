@@ -97,7 +97,8 @@ func TestSignalShutdown(t *testing.T) {
 
 			addr := waitForProcessAddr(t, &out, exited)
 			c := newSNClient(t, addr)
-			connect(t, c, "e2e-signal-"+name)
+			id := fmt.Sprintf("e2e-signal-%s-%d", name, time.Now().UnixNano())
+			connect(t, c, id)
 
 			if err := cmd.Process.Signal(sig); err != nil {
 				t.Fatal(err)
@@ -110,7 +111,7 @@ func TestSignalShutdown(t *testing.T) {
 			case <-time.After(waitLong):
 				t.Fatalf("process did not exit after %s", name)
 			}
-			b.waitForLog(t, `Client e2e-signal-`+name+` \[\S+\] disconnected`, 1)
+			b.waitForLog(t, `Client `+id+` \[\S+\] disconnected`, 1)
 		})
 	}
 }
@@ -151,12 +152,14 @@ func TestShutdownClosesBrokerAndLeavesNoGoroutines(t *testing.T) {
 	before := runtime.NumGoroutine()
 	gw := startGateway(t, b.addr)
 	c := newSNClient(t, gw.addr)
-	connect(t, c, "e2e-cancel")
+	// Unique id: the shared broker log keeps earlier runs, so a fixed id would match again with -count > 1.
+	id := fmt.Sprintf("e2e-cancel-%d", time.Now().UnixNano())
+	connect(t, c, id)
 
 	if code := gw.stop(t); code != 0 {
 		t.Fatalf("exit status %d after cancel, want 0; output: %s", code, gw.stdout.String())
 	}
-	b.waitForLog(t, `Client e2e-cancel \[\S+\] disconnected`, 1)
+	b.waitForLog(t, `Client `+id+` \[\S+\] disconnected`, 1)
 
 	deadline := time.Now().Add(waitShort)
 	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {

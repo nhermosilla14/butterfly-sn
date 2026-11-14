@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"sync"
@@ -9,6 +11,11 @@ import (
 
 	mqtt "github.com/nhermosilla14/butterfly-mqtt-client"
 	"github.com/nhermosilla14/butterfly-sn/internal/mqttsn"
+)
+
+var (
+	errBrokerDisconnect = errors.New("broker sent MQTT DISCONNECT")
+	errPingTimeout      = errors.New("broker PINGRESP missing")
 )
 
 // session owns one MQTT-SN client and its broker connection. Only run touches session state.
@@ -103,9 +110,23 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 			log.Info("client closed by shutdown")
 			return
 		case e := <-events:
-			s.handleBrokerEvent(e, log)
+			if ctx.Err() != nil {
+				continue // shutdown: the case above ends the session
+			}
+			if e.err != nil {
+				s.loseBroker(log, e.err)
+				return
+			}
+			if e.event.Kind == mqtt.EventDisconnect {
+				s.loseBroker(log, errBrokerDisconnect)
+				return
+			}
+			s.handleBrokerEvent(e.event, log)
 		case <-keepaliveDue:
-			s.keepaliveDue(broker, interval, keepalive, log)
+			if err := s.keepaliveDue(broker, interval, keepalive); err != nil {
+				s.loseBroker(log, err)
+				return
+			}
 		case m := <-s.inbox:
 			switch m := m.(type) {
 			case mqttsn.Disconnect:
@@ -117,12 +138,25 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 			case mqttsn.Register:
 				s.handleRegister(m, log)
 			case mqttsn.Publish:
-				s.handlePublish(broker, m, log)
+				if err := s.handlePublish(broker, m, log); err != nil {
+					s.loseBroker(log, err)
+					return
+				}
 			default:
 				log.Debug("ignored packet", "type", m)
 			}
 		}
 	}
+}
+
+// loseBroker ends the session after the broker connection is lost. The client gets one DISCONNECT, sent after
+// the session is removed so a retry from the client gets a fresh session. The caller then returns, which closes
+// the broker connection and joins the reader. Pending QoS 1 ids are dropped without PUBACK. The cause is logged
+// without payload bytes.
+func (s *session) loseBroker(log *slog.Logger, err error) {
+	log.Warn("broker connection lost, disconnecting client", "error", err)
+	s.gw.removeSession(s)
+	s.gw.sendTo(s.addr, mqttsn.Disconnect{})
 }
 
 // readBroker reads broker packets in arrival order and hands them to the session loop. It ends after a
@@ -144,14 +178,10 @@ func (s *session) readBroker(ctx context.Context, broker *mqtt.Client, events ch
 
 // handleBrokerEvent handles one broker packet. A PUBACK is sent to the client once the broker has
 // acknowledged the matching PUBLISH.
-func (s *session) handleBrokerEvent(e brokerEvent, log *slog.Logger) {
-	if e.err != nil {
-		log.Warn("broker connection read failed, no more broker packets will be read", "error", e.err)
-		return
-	}
-	switch e.event.Kind {
+func (s *session) handleBrokerEvent(e mqtt.Event, log *slog.Logger) {
+	switch e.Kind {
 	case mqtt.EventPuback:
-		id := e.event.PacketID
+		id := e.PacketID
 		topicID, ok := s.pending[id]
 		if !ok {
 			log.Warn("ignored broker PUBACK for unknown packet id", "packet_id", id)
@@ -161,30 +191,26 @@ func (s *session) handleBrokerEvent(e brokerEvent, log *slog.Logger) {
 		s.gw.sendTo(s.addr, mqttsn.Puback{TopicID: topicID, MsgID: id, ReturnCode: mqttsn.ReturnAccepted})
 	case mqtt.EventPingresp:
 		s.pingOutstanding = false
-	case mqtt.EventDisconnect:
-		log.Warn("broker sent MQTT DISCONNECT, no more broker packets will be read")
 	}
 }
 
 // keepaliveDue runs when the keepalive timer fires. It pings the broker if nothing was written for a whole
-// interval and re-arms the timer. A PINGREQ still unanswered when the next one is due is only logged.
-func (s *session) keepaliveDue(broker *mqtt.Client, interval time.Duration, timer *time.Timer, log *slog.Logger) {
+// interval and re-arms the timer. A PINGREQ still unanswered when the next one is due means the broker is lost.
+func (s *session) keepaliveDue(broker *mqtt.Client, interval time.Duration, timer *time.Timer) error {
 	if s.pingOutstanding {
-		log.Warn("broker PINGRESP missing", "interval", interval)
-		timer.Reset(interval)
-		return
+		return errPingTimeout
 	}
 	if idle := time.Since(s.lastWrite); idle < interval {
 		timer.Reset(interval - idle)
-		return
+		return nil
 	}
 	timer.Reset(interval)
 	if err := broker.Pingreq(); err != nil {
-		log.Warn("broker PINGREQ failed", "error", err)
-		return
+		return fmt.Errorf("keepalive PINGREQ: %w", err)
 	}
 	s.lastWrite = time.Now()
 	s.pingOutstanding = true
+	return nil
 }
 
 func (s *session) handleRegister(m mqttsn.Register, log *slog.Logger) {
@@ -198,45 +224,44 @@ func (s *session) handleRegister(m mqttsn.Register, log *slog.Logger) {
 }
 
 // handlePublish forwards QoS 0 and QoS 1 publishes on normal topic ids. Other publishes are not handled yet.
-// The payload is never logged.
-func (s *session) handlePublish(broker *mqtt.Client, m mqttsn.Publish, log *slog.Logger) {
+// The payload is never logged. An error means the broker write failed and the broker connection is lost.
+func (s *session) handlePublish(broker *mqtt.Client, m mqttsn.Publish, log *slog.Logger) error {
 	if m.QoS > 1 || m.TopicIDType != mqttsn.TopicIDNormal {
 		log.Debug("ignored PUBLISH: only QoS 0 and 1 with normal topic id are supported", "qos", m.QoS, "topic_id_type", m.TopicIDType)
-		return
+		return nil
 	}
 	name, ok := s.topics.lookup(m.TopicID)
 	if !ok {
 		log.Debug("dropped PUBLISH with unknown topic id", "topic_id", m.TopicID)
-		return
+		return nil
 	}
 	if m.QoS == 1 {
-		s.publishQoS1(broker, m, name, log)
-		return
+		return s.publishQoS1(broker, m, name, log)
 	}
 	if err := broker.Publish(name, m.Data, m.Retain); err != nil {
-		log.Warn("publish to broker failed", "topic", name, "error", err)
-		return
+		return fmt.Errorf("publish: %w", err)
 	}
 	s.lastWrite = time.Now()
+	return nil
 }
 
 // publishQoS1 sends the PUBLISH to the broker. The client's PUBACK follows only once the broker acknowledges it.
 // The session loop handles broker acks, so pending is updated before any ack can be read.
-func (s *session) publishQoS1(broker *mqtt.Client, m mqttsn.Publish, name string, log *slog.Logger) {
+func (s *session) publishQoS1(broker *mqtt.Client, m mqttsn.Publish, name string, log *slog.Logger) error {
 	if m.MsgID == 0 {
 		log.Debug("dropped QoS 1 PUBLISH with msg id 0")
-		return
+		return nil
 	}
 	if _, busy := s.pending[m.MsgID]; busy {
 		log.Warn("dropped QoS 1 PUBLISH: msg id still awaiting broker PUBACK", "msg_id", m.MsgID)
-		return
+		return nil
 	}
 	if err := broker.PublishQoS1(name, m.Data, m.Retain, m.DUP, m.MsgID); err != nil {
-		log.Warn("QoS 1 publish to broker failed", "topic", name, "error", err)
-		return
+		return fmt.Errorf("QoS 1 publish: %w", err)
 	}
 	s.lastWrite = time.Now()
 	s.pending[m.MsgID] = m.TopicID
+	return nil
 }
 
 func (s *session) connectBroker(ctx context.Context, c mqttsn.Connect) (*mqtt.Client, error) {

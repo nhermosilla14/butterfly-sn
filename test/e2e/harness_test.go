@@ -35,7 +35,13 @@ type gateway struct {
 
 func startGateway(t *testing.T, brokerAddr string) *gateway {
 	t.Helper()
-	cfgPath := writeConfig(t, fmt.Sprintf("listen: 127.0.0.1:0\nbroker: %s\nmax_clients: 10\nlog_level: debug\n", brokerAddr))
+	return startGatewayMax(t, brokerAddr, 10)
+}
+
+// startGatewayMax is startGateway with a given max_clients.
+func startGatewayMax(t *testing.T, brokerAddr string, maxClients int) *gateway {
+	t.Helper()
+	cfgPath := writeConfig(t, fmt.Sprintf("listen: 127.0.0.1:0\nbroker: %s\nmax_clients: %d\nlog_level: debug\n", brokerAddr, maxClients))
 	ctx, cancel := context.WithCancel(context.Background())
 	g := &gateway{cancel: cancel, done: make(chan int, 1), stdout: &syncBuffer{}}
 	go func() { g.done <- app.Run(ctx, []string{"-config", cfgPath}, g.stdout) }()
