@@ -1,8 +1,9 @@
 # Will handshake and publication
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-14
 - Owner: Nicolás Hermosilla
+- Approved by: Nicolás Hermosilla
 - Depends on: none
 
 ## Goal
