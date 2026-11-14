@@ -26,8 +26,8 @@ published and its slot is freed.
   immediately.
 - CONNECT from an asleep client gets CONNACK Accepted, flushes the same way, and leaves the session active; no
   new broker connection is opened and the new CONNECT duration, clean-session flag and will are ignored.
-- Buffered QoS 1 messages are sent with their original broker packet id as msg id. The client PUBACK is accepted
-  but no second MQTT PUBACK is sent to the broker, because it was already acknowledged when buffered.
+- Buffered QoS 1 messages are sent with a gateway-assigned msg id, because the broker may reuse its packet id
+  after the early acknowledgement. The client PUBACK is accepted but no second MQTT PUBACK is sent to the broker.
 - DISCONNECT from an asleep or awake client ends the session normally: MQTT DISCONNECT to the broker, DISCONNECT
   to the client, buffer dropped and no will published.
 - Sleep timer expiry declares the client lost: the broker connection is closed so a will is published when one

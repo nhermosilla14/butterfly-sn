@@ -32,8 +32,10 @@ downlink hold and REGISTER machinery, and timers for keepalive and inactivity.
   subscriptions use the short form; unknown topics allocate an id, send REGISTER and wait for REGACK through the
   existing hold machinery. A rejected REGACK drops the entry. PINGRESP is delayed while a REGISTER for a buffered
   message is outstanding; a missing REGACK waits indefinitely until the retransmission intent bounds it.
-- Buffered QoS 1 messages keep their original broker packet id as msg id. Their client PUBACK is matched against
-  a pre-acknowledged set and never produces a second MQTT PUBACK; an unknown or rejected id is logged.
+- Buffered QoS 1 messages were acknowledged to the broker when buffered, so the broker may have reused their
+  packet ids by the time the client wakes. On flush each buffered QoS 1 message therefore gets a gateway-assigned
+  msg id (1..65535, not in use by another delivery). Its client PUBACK is matched against a pre-acknowledged set
+  and never produces a second MQTT PUBACK; an unknown or rejected id is logged.
 - DISCONNECT from asleep or awake is a normal disconnect: MQTT DISCONNECT, client DISCONNECT, session removed and
   buffer dropped. Sleep timer expiry is a loss: remove the session, close the broker socket bare when a will
   exists (publishing it), otherwise send MQTT DISCONNECT, send a best-effort client DISCONNECT and drop the

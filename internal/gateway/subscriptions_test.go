@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +21,8 @@ type subBroker struct {
 	conn    chan net.Conn
 	packets chan mqtt.Packet
 	done    chan struct{}
+	// closed is closed when the gateway ends the connection.
+	closed chan struct{}
 }
 
 func startSubBroker(t *testing.T) *subBroker {
@@ -28,11 +31,12 @@ func startSubBroker(t *testing.T) *subBroker {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sb := &subBroker{ln: ln, conn: make(chan net.Conn, 1), packets: make(chan mqtt.Packet, 64), done: make(chan struct{})}
+	sb := &subBroker{ln: ln, conn: make(chan net.Conn, 1), packets: make(chan mqtt.Packet, 64), done: make(chan struct{}), closed: make(chan struct{})}
 	go sb.serve()
 	return sb
 }
 
+// serve answers PINGREQ with PINGRESP, so keepalive tests can run without the test answering pings.
 func (sb *subBroker) serve() {
 	defer close(sb.done)
 	conn, err := sb.ln.Accept()
@@ -52,7 +56,11 @@ func (sb *subBroker) serve() {
 		p, err := mqtt.ReadPacket(conn)
 		if err != nil {
 			_ = conn.Close()
+			close(sb.closed)
 			return
+		}
+		if p.Type == pktPingreq {
+			_, _ = conn.Write([]byte{0xD0, 0x00})
 		}
 		sb.packets <- p
 	}
@@ -61,13 +69,22 @@ func (sb *subBroker) serve() {
 // subRig is a running gateway with one connected client and a fake broker.
 type subRig struct {
 	t      *testing.T
+	gw     *Gateway
 	gwAddr *net.UDPAddr
 	client *net.UDPConn
 	broker *subBroker
 	bconn  net.Conn
+	// stop shuts the gateway down and returns Run's error. Later calls return the same result.
+	stop func() error
 }
 
 func startSubRig(t *testing.T) *subRig {
+	t.Helper()
+	return startSubRigDuration(t, 0)
+}
+
+// startSubRigDuration is startSubRig with the client's CONNECT duration.
+func startSubRigDuration(t *testing.T, duration uint16) *subRig {
 	t.Helper()
 	sb := startSubBroker(t)
 	cfg := config.Config{Listen: "127.0.0.1:0", Broker: sb.ln.Addr().String(), MaxClients: 10}
@@ -78,26 +95,46 @@ func startSubRig(t *testing.T) *subRig {
 	ctx, cancel := context.WithCancel(context.Background())
 	runDone := make(chan error, 1)
 	go func() { runDone <- g.Run(ctx) }()
+	var stopOnce sync.Once
+	var runErr error
+	stop := func() error {
+		stopOnce.Do(func() {
+			cancel()
+			runErr = <-runDone
+		})
+		return runErr
+	}
 
 	client, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		cancel()
-		if err := <-runDone; err != nil {
+		if err := stop(); err != nil {
 			t.Errorf("gateway Run: %v", err)
 		}
 		_ = sb.ln.Close()
 		<-sb.done
 		_ = client.Close()
 	})
-	r := &subRig{t: t, gwAddr: g.Addr().(*net.UDPAddr), client: client, broker: sb}
-	sendSN(t, client, r.gwAddr, mqttsn.Connect{CleanSession: true, ClientID: "gw-subscriptions"})
+	r := &subRig{t: t, gw: g, gwAddr: g.Addr().(*net.UDPAddr), client: client, broker: sb, stop: stop}
+	sendSN(t, client, r.gwAddr, mqttsn.Connect{CleanSession: true, Duration: duration, ClientID: "gw-subscriptions"})
 	readAs[mqttsn.Connack](t, client)
 	r.bconn = <-sb.conn
 	t.Cleanup(func() { _ = r.bconn.Close() })
 	return r
+}
+
+// session returns the gateway's only session. Its fields belong to the session goroutine, so read them only
+// after stop.
+func (r *subRig) session() *session {
+	r.gw.mu.Lock()
+	defer r.gw.mu.Unlock()
+	for _, s := range r.gw.sessions {
+		return s
+	}
+	r.t.Fatal("no session")
+	return nil
 }
 
 // nextBroker returns the next packet the broker received, failing if none arrives in time.

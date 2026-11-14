@@ -51,6 +51,13 @@ type session struct {
 	pingOutstanding bool
 	// will is the client's will, collected by awaitWill before the broker is dialled. It is never logged.
 	will willState
+	// sleeping is set while the client sleeps after a DISCONNECT with a duration. See sleep.go.
+	sleeping bool
+	// sleepBuf holds the broker PUBLISHes buffered while the client sleeps, in arrival order.
+	sleepBuf []mqtt.Event
+	// preAcked holds the broker packet ids of the QoS 1 PUBLISHes buffered while asleep. They were already
+	// acknowledged to the broker, so their client PUBACK must not produce a second one.
+	preAcked map[uint16]struct{}
 }
 
 // willState is the will a client sent in the handshake. hasWill is set only once the will message arrived;
@@ -113,6 +120,7 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 	s.pendingRegs = make(map[uint16]*pendingReg)
 	s.regByTopic = make(map[string]uint16)
 	s.pendingDownlink = make(map[uint16]uint16)
+	s.preAcked = make(map[uint16]struct{})
 	if c.Will && !s.awaitWill(ctx, log) {
 		return
 	}
@@ -164,6 +172,15 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 		inactivityDue = inactivity.C
 	}
 
+	// The sleep timer is armed only while the client sleeps; a nil channel never fires.
+	var sleep *time.Timer
+	var sleepDue <-chan time.Time
+	defer func() {
+		if sleep != nil {
+			sleep.Stop()
+		}
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -202,16 +219,37 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 				inactivity.Reset(limit - idle)
 				continue
 			}
-			s.clientTimedOut(broker, log)
+			log.Warn("client silent beyond its keepalive, disconnecting")
+			s.clientTimedOut(broker)
+			return
+		case <-sleepDue:
+			log.Warn("client asleep beyond its sleep duration, disconnecting")
+			s.clientTimedOut(broker)
 			return
 		case in := <-s.inbox:
 			lastClient = in.at
+			if s.sleeping && ignoredWhileAsleep(in.msg, log) {
+				continue
+			}
 			switch m := in.msg.(type) {
 			case nil:
 				log.Debug("ignored unsupported packet")
 			case mqttsn.Pingreq:
 				s.gw.sendTo(s.addr, mqttsn.Pingresp{})
 			case mqttsn.Disconnect:
+				if m.HasDuration && m.Duration > 0 && !s.sleeping {
+					// Sleep: the broker stays connected and the client gets its DISCONNECT as the reply.
+					s.sleeping = true
+					if inactivity != nil {
+						inactivity.Stop()
+					}
+					inactivityDue = nil
+					sleep = time.NewTimer(inactivityLimit(m.Duration))
+					sleepDue = sleep.C
+					s.gw.sendTo(s.addr, mqttsn.Disconnect{})
+					log.Info("client asleep", "sleep_duration", m.Duration)
+					continue
+				}
 				_ = broker.Disconnect()
 				s.gw.removeSession(s)
 				s.gw.sendTo(s.addr, mqttsn.Disconnect{})
@@ -321,12 +359,11 @@ func (s *session) loseBroker(log *slog.Logger, err error) {
 	s.gw.sendTo(s.addr, mqttsn.Disconnect{})
 }
 
-// clientTimedOut ends the session after the client has been silent for longer than its inactivity limit. The
-// session is removed first, so the slot is free and a retry from the client gets a fresh session. Then the
-// broker connection is ended (see endBrokerConn), and a best-effort DISCONNECT goes to the client. The caller
-// returns, which closes the broker connection.
-func (s *session) clientTimedOut(broker *mqtt.Client, log *slog.Logger) {
-	log.Warn("client silent beyond its keepalive, disconnecting")
+// clientTimedOut ends the session after the client has been silent for longer than its inactivity limit, or
+// asleep for longer than its sleep limit. The session is removed first, so the slot is free and a retry from
+// the client gets a fresh session. Then the broker connection is ended (see endBrokerConn), and a best-effort
+// DISCONNECT goes to the client. The caller returns, which closes the broker connection.
+func (s *session) clientTimedOut(broker *mqtt.Client) {
 	s.gw.removeSession(s)
 	endBrokerConn(broker, s.will.hasWill)
 	s.gw.sendTo(s.addr, mqttsn.Disconnect{})
@@ -378,6 +415,9 @@ func (s *session) handleBrokerEvent(broker *mqtt.Client, e mqtt.Event, log *slog
 	case mqtt.EventUnsuback:
 		s.handleUnsuback(e, log)
 	case mqtt.EventPublish:
+		if s.sleeping {
+			return s.bufferDownlink(broker, e, log)
+		}
 		return s.handleDownlink(broker, e, log)
 	case mqtt.EventPingresp:
 		s.pingOutstanding = false
