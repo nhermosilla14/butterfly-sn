@@ -91,9 +91,14 @@ func packet(typ, flags byte, body []byte) ([]byte, error) {
 }
 
 func appendString(b []byte, s string) ([]byte, error) {
-	if len(s) > 0xFFFF {
-		return nil, fmt.Errorf("%w: string of %d bytes exceeds 65535", ErrMalformedPacket, len(s))
+	return appendBytes(b, []byte(s))
+}
+
+// appendBytes appends data with a two-byte length prefix, as MQTT strings and binary data are framed.
+func appendBytes(b []byte, data []byte) ([]byte, error) {
+	if len(data) > 0xFFFF {
+		return nil, fmt.Errorf("%w: field of %d bytes exceeds 65535", ErrMalformedPacket, len(data))
 	}
-	b = append(b, byte(len(s)>>8), byte(len(s)))
-	return append(b, s...), nil
+	b = append(b, byte(len(data)>>8), byte(len(data)))
+	return append(b, data...), nil
 }

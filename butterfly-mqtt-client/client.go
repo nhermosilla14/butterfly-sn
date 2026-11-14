@@ -5,8 +5,10 @@ package mqtt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 )
@@ -15,14 +17,25 @@ const (
 	protocolLevel311 = 4
 	writeTimeout     = 5 * time.Second
 	flagCleanSession = 0x02
+	flagWill         = 0x04
+	willQoSShift     = 3
+	flagWillRetain   = 0x20
 )
 
-// ConnectOptions holds the CONNECT fields. Will, username and password are not supported yet;
-// they can be added here without changing the call sites that set the fields below.
+// ErrInvalidWill reports will fields that cannot be sent: QoS above 1, or will fields without a will topic.
+var ErrInvalidWill = errors.New("mqtt: invalid will")
+
+// ConnectOptions holds the CONNECT fields. Username and password are not supported yet.
+// A will is set only when WillTopic is not empty; then WillPayload, WillQoS (0 or 1) and WillRetain apply.
+// With an empty WillTopic, the other will fields must be zero.
 type ConnectOptions struct {
 	ClientID     string
 	CleanSession bool
 	KeepAlive    uint16 // seconds; 0 disables the broker's keepalive check
+	WillTopic    string
+	WillPayload  []byte
+	WillQoS      byte
+	WillRetain   bool
 }
 
 // ConnackError is returned by Connect when the broker answers with a non-zero return code.
@@ -132,8 +145,33 @@ func connectBody(o ConnectOptions) ([]byte, error) {
 	if o.CleanSession {
 		flags |= flagCleanSession
 	}
+	if o.WillTopic != "" {
+		if o.WillQoS > 1 {
+			return nil, fmt.Errorf("%w: QoS %d, want 0 or 1", ErrInvalidWill, o.WillQoS)
+		}
+		if strings.ContainsAny(o.WillTopic, "+#") {
+			return nil, ErrInvalidTopic
+		}
+		flags |= flagWill | o.WillQoS<<willQoSShift
+		if o.WillRetain {
+			flags |= flagWillRetain
+		}
+	} else if len(o.WillPayload) > 0 || o.WillQoS != 0 || o.WillRetain {
+		return nil, fmt.Errorf("%w: will fields without a will topic", ErrInvalidWill)
+	}
 	b = append(b, protocolLevel311, flags, byte(o.KeepAlive>>8), byte(o.KeepAlive))
-	return appendString(b, o.ClientID)
+	b, err = appendString(b, o.ClientID)
+	if err != nil {
+		return nil, err
+	}
+	if o.WillTopic == "" {
+		return b, nil
+	}
+	b, err = appendString(b, o.WillTopic)
+	if err != nil {
+		return nil, err
+	}
+	return appendBytes(b, o.WillPayload)
 }
 
 func checkConnack(p Packet) error {

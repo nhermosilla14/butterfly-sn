@@ -33,7 +33,22 @@ type session struct {
 	lastWrite time.Time
 	// pingOutstanding is set while a PINGREQ awaits its PINGRESP.
 	pingOutstanding bool
+	// will is the client's will, collected by awaitWill before the broker is dialled. It is never logged.
+	will willState
 }
+
+// willState is the will a client sent in the handshake. hasWill is set only once the will message arrived;
+// a WILLTOPIC alone does not make a will.
+type willState struct {
+	hasWill bool
+	topic   string
+	payload []byte
+	qos     byte
+	retain  bool
+}
+
+// willHandshakeTimeout bounds the whole will handshake, from WILLTOPICREQ to the last will prompt answer.
+const willHandshakeTimeout = 10 * time.Second
 
 // inbound is one client datagram handed to the session. msg is nil for a valid type this package does not
 // decode; it still counts as client activity. at is the arrival time, used by the inactivity timer.
@@ -76,8 +91,8 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 
 	log := s.gw.log.With("client", s.addr.String(), "client_id", c.ClientID)
 	s.pending = make(map[uint16]uint16)
-	if c.Will {
-		log.Debug("CONNECT Will flag ignored: will is not supported yet")
+	if c.Will && !s.awaitWill(ctx, log) {
+		return
 	}
 
 	broker, err := s.connectBroker(ctx, c)
@@ -186,6 +201,66 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 				}
 			default:
 				log.Debug("ignored packet", "type", m)
+			}
+		}
+	}
+}
+
+// awaitWill runs the will handshake before the broker is contacted: WILLTOPICREQ, then WILLTOPIC; a non-empty
+// topic is followed by WILLMSGREQ and WILLMSG. It returns true when the broker may be dialled. It returns false
+// when the session must end without broker contact: the client sent DISCONNECT, the handshake timed out, or the
+// will QoS is refused. Those cases remove the session and reply here. On shutdown it just returns false.
+func (s *session) awaitWill(ctx context.Context, log *slog.Logger) bool {
+	s.gw.sendTo(s.addr, mqttsn.WillTopicReq{})
+	timer := time.NewTimer(willHandshakeTimeout)
+	defer timer.Stop()
+	awaitingMsg := false
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-timer.C:
+			log.Warn("will handshake timed out, disconnecting client")
+			s.gw.removeSession(s)
+			s.gw.sendTo(s.addr, mqttsn.Disconnect{})
+			return false
+		case in := <-s.inbox:
+			switch m := in.msg.(type) {
+			case mqttsn.WillTopic:
+				switch {
+				case awaitingMsg:
+					log.Debug("ignored repeated WILLTOPIC during will handshake")
+				case m.Topic == "":
+					log.Info("client sent an empty will topic, connecting without a will")
+					return true
+				case m.QoS > 1:
+					log.Warn("will QoS not supported, rejecting client", "qos", m.QoS)
+					// Remove before replying, as on every rejection, so a retry gets a fresh session.
+					s.gw.removeSession(s)
+					s.gw.sendTo(s.addr, mqttsn.Connack{ReturnCode: mqttsn.ReturnNotSupported})
+					return false
+				default:
+					s.will = willState{topic: m.Topic, qos: m.QoS, retain: m.Retain}
+					awaitingMsg = true
+					s.gw.sendTo(s.addr, mqttsn.WillMsgReq{})
+				}
+			case mqttsn.WillMsg:
+				if !awaitingMsg {
+					log.Debug("ignored WILLMSG before WILLTOPIC")
+					continue
+				}
+				s.will.payload = m.Payload
+				s.will.hasWill = true
+				return true
+			case mqttsn.Disconnect:
+				s.gw.removeSession(s)
+				s.gw.sendTo(s.addr, mqttsn.Disconnect{})
+				log.Info("client disconnected during will handshake")
+				return false
+			case nil:
+				log.Debug("ignored unsupported packet during will handshake")
+			default:
+				log.Debug("ignored packet during will handshake", "type", m)
 			}
 		}
 	}
@@ -322,9 +397,16 @@ func (s *session) connectBroker(ctx context.Context, c mqttsn.Connect) (*mqtt.Cl
 	if err != nil {
 		return nil, err
 	}
+	opts := mqtt.ConnectOptions{ClientID: c.ClientID, CleanSession: true, KeepAlive: c.Duration}
+	if s.will.hasWill {
+		opts.WillTopic = s.will.topic
+		opts.WillPayload = s.will.payload
+		opts.WillQoS = s.will.qos
+		opts.WillRetain = s.will.retain
+	}
 	hctx, cancel := context.WithTimeout(ctx, brokerTimeout)
 	defer cancel()
-	err = cl.Connect(hctx, mqtt.ConnectOptions{ClientID: c.ClientID, CleanSession: true, KeepAlive: c.Duration})
+	err = cl.Connect(hctx, opts)
 	if err != nil {
 		_ = cl.Close()
 		return nil, err

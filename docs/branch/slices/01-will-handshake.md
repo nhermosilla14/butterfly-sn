@@ -1,6 +1,6 @@
 # Will handshake and broker will
 
-- Status: In progress
+- Status: Done
 - Intents: 20261114-will-handshake-and-publication
 - ADRs: 20261114-will-handshake-and-broker-mapping
 - Depends on: none

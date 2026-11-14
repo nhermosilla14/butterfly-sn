@@ -1,7 +1,7 @@
 # Architecture
 
-Current state after the session-liveness intent (connect, registered-topic QoS 0 and QoS 1 publish, disconnect,
-bad-input handling, client timeouts, gateway-side broker keepalive and broker-loss handling). Decisions:
+Current state after slice 01 of the will intent (connect, registered-topic QoS 0 and QoS 1 publish, disconnect,
+bad-input handling, client timeouts, broker keepalive, broker-loss handling and the will handshake). Decisions:
 `docs/adr/` and `docs/branch/adr/`.
 
 ```
@@ -21,7 +21,7 @@ bad-input handling, client timeouts, gateway-side broker keepalive and broker-lo
 | `cmd/butterfly-sn` | `main`: signals (SIGINT, SIGTERM), calls `internal/app` |
 | `internal/app` | Startup path shared by `main` and the e2e tests: flags, config, logging, run |
 | `internal/config` | YAML loading, defaults, validation (unknown keys rejected) |
-| `internal/mqttsn` | MQTT-SN packet codec, no I/O (CONNECT, CONNACK, REGISTER, REGACK, PUBLISH, PUBACK, PINGREQ, PINGRESP, DISCONNECT) |
+| `internal/mqttsn` | MQTT-SN packet codec, no I/O (CONNECT, CONNACK, REGISTER, REGACK, PUBLISH, PUBACK, PINGREQ, PINGRESP, DISCONNECT, WILLTOPICREQ, WILLTOPIC, WILLMSGREQ, WILLMSG) |
 | `internal/gateway` | UDP listener and router; one session goroutine, one broker reader goroutine and a normal-topic table per client |
 | `butterfly-mqtt-client/` | Standalone MQTT 3.1.1 client module (own `go.mod`, stdlib only, no gateway concepts), joined by a `replace` directive so it can move to its own repo |
 | `test/e2e` | End-to-end tests: gateway in-process, real Mosquitto in a container (testcontainers-go, Docker), plain MQTT observer |
@@ -33,6 +33,10 @@ bad-input handling, client timeouts, gateway-side broker keepalive and broker-lo
   rejected with DISCONNECT without creating a session or contacting the broker. The session goroutine dials
   the broker with a timeout, sends MQTT CONNECT, and answers CONNACK Accepted, or Congestion if anything
   failed.
+- A CONNECT with the Will flag runs the will handshake before any broker contact: WILLTOPICREQ, WILLTOPIC,
+  WILLMSGREQ, WILLMSG. An empty will topic skips the message prompt and connects without a will; a QoS 2 will
+  gets CONNACK Not supported. The whole handshake has a 10 second timeout; on timeout the session is removed
+  and the client gets DISCONNECT. The collected will travels in the broker CONNECT.
 - Any other valid packet from an address with no live session gets DISCONNECT; DISCONNECT itself is ignored
   there to avoid an answer loop. This is also the case for a client whose session just ended.
 - REGISTER adds the exact topic name to the session's table and answers REGACK. New ids are allocated from 1 to
