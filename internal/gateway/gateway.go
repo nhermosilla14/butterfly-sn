@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"net"
 	"sync"
 	"time"
@@ -19,7 +20,12 @@ const (
 	brokerTimeout = 5 * time.Second
 	inboxSize     = 16
 	maxDatagram   = 65535
+	// maxDiscoveryDelay bounds the random wait before a GWINFO reply, so searching clients do not all answer at once.
+	maxDiscoveryDelay = 500 * time.Millisecond
 )
+
+// discoveryDelay picks the wait before a GWINFO reply. Tests replace it to avoid sleeping.
+var discoveryDelay = func() time.Duration { return rand.N(maxDiscoveryDelay) }
 
 // Gateway is a UDP listener bound by New and served by Run.
 type Gateway struct {
@@ -82,6 +88,15 @@ func (g *Gateway) route(ctx context.Context, data []byte, addr *net.UDPAddr) {
 		g.log.Debug("ignored malformed datagram", "from", addr, "error", err)
 		return
 	}
+	// Discovery is handled before session lookup, so it never creates or touches a session.
+	switch msg.(type) {
+	case mqttsn.Searchgw:
+		g.scheduleGwinfo(ctx, addr)
+		return
+	case mqttsn.Gwinfo, mqttsn.Advertise:
+		g.log.Debug("ignored discovery message", "from", addr, "type", fmt.Sprintf("%T", msg))
+		return
+	}
 	key := addr.String()
 
 	g.mu.Lock()
@@ -94,6 +109,23 @@ func (g *Gateway) route(ctx context.Context, data []byte, addr *net.UDPAddr) {
 	g.mu.Unlock()
 	// A nil msg (unsupported type) still reaches the session, where it counts as activity.
 	s.deliver(msg)
+}
+
+// scheduleGwinfo sends one unicast GWINFO to addr after a random delay. The radius of SEARCHGW is ignored.
+// The wait is part of g.wg and ends when ctx does, so Run closes the socket only after no reply is pending.
+// Searches are not rate-limited.
+func (g *Gateway) scheduleGwinfo(ctx context.Context, addr *net.UDPAddr) {
+	timer := time.NewTimer(discoveryDelay())
+	g.wg.Add(1)
+	go func() {
+		defer g.wg.Done()
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			g.sendTo(addr, mqttsn.Gwinfo{GwID: byte(g.cfg.GatewayID)})
+		case <-ctx.Done():
+		}
+	}()
 }
 
 // openSessionLocked starts a session for a CONNECT from an unknown sender. Any other packet from an
@@ -134,6 +166,9 @@ func (g *Gateway) removeSession(s *session) {
 }
 
 func (g *Gateway) sendTo(addr *net.UDPAddr, m mqttsn.Message) {
+	if g.conn == nil {
+		return
+	}
 	b, err := mqttsn.Encode(m)
 	if err != nil {
 		g.log.Error("encode failed", "error", err)

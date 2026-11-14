@@ -12,3 +12,6 @@ max_clients: 100
 
 # Log level: debug, info, warn or error. Default: info.
 log_level: info
+
+# Gateway id (1-255) sent in GWINFO replies to SEARCHGW. Default: 1.
+gateway_id: 1

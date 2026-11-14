@@ -46,6 +46,11 @@ func TestRoundTrip(t *testing.T) {
 		WillMsg{Payload: []byte("offline")},
 		WillMsg{Payload: allBytes()},
 		WillMsg{},
+		Advertise{GwID: 0xFF, Duration: 0xFFFF},
+		Searchgw{},
+		Searchgw{Radius: 0xFF, HasRadius: true},
+		Gwinfo{GwID: 1},
+		Gwinfo{GwID: 7, Address: []byte{0, 1, 2, 3, 4, 5}},
 	}
 	for _, m := range cases {
 		b, err := Encode(m)
@@ -347,9 +352,42 @@ func TestWillTopicDecodeIgnoresUnusedFlags(t *testing.T) {
 	}
 }
 
+func TestDiscoveryExactBytes(t *testing.T) {
+	cases := []struct {
+		m    Message
+		want []byte
+	}{
+		{Searchgw{}, []byte{0x02, 0x01}},
+		{Searchgw{Radius: 0, HasRadius: true}, []byte{0x03, 0x01, 0x00}},
+		{Gwinfo{GwID: 5}, []byte{0x03, 0x02, 0x05}},
+		{Gwinfo{GwID: 5, Address: []byte{192, 168, 1, 2}}, []byte{0x07, 0x02, 0x05, 192, 168, 1, 2}},
+		{Advertise{GwID: 1, Duration: 900}, []byte{0x05, 0x00, 0x01, 0x03, 0x84}},
+	}
+	for _, tc := range cases {
+		got, err := Encode(tc.m)
+		if err != nil || !bytes.Equal(got, tc.want) {
+			t.Errorf("Encode(%+v) = %v, %v; want %v", tc.m, got, err, tc.want)
+		}
+	}
+}
+
+func TestDiscoveryMalformed(t *testing.T) {
+	cases := map[string][]byte{
+		"searchgw two-byte body": {0x04, 0x01, 0x00, 0x00},
+		"advertise short":        {0x04, 0x00, 0x01, 0x00},
+		"advertise long":         {0x06, 0x00, 0x01, 0x00, 0x00, 0x01},
+		"gwinfo no gateway id":   {0x02, 0x02},
+	}
+	for name, raw := range cases {
+		if _, err := Decode(raw); !errors.Is(err, ErrMalformed) {
+			t.Errorf("%s: got %v, want ErrMalformed", name, err)
+		}
+	}
+}
+
 func TestDecodeUnsupported(t *testing.T) {
-	// ADVERTISE (0x00) is valid MQTT-SN but not implemented yet.
-	if _, err := Decode([]byte{0x02, 0x00}); !errors.Is(err, ErrUnsupported) {
+	// 0x03 is reserved in MQTT-SN v1.2 and not implemented.
+	if _, err := Decode([]byte{0x02, 0x03}); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("got %v, want ErrUnsupported", err)
 	}
 }
@@ -362,6 +400,8 @@ func FuzzDecode(f *testing.F) {
 		Subscribe{MsgID: 1, TopicName: "a/#"}, Suback{MsgID: 1}, Unsubscribe{MsgID: 1, TopicName: "a"}, Unsuback{MsgID: 1},
 		Pingreq{}, Pingreq{ClientID: "a"}, Pingresp{},
 		WillTopicReq{}, WillTopic{QoS: 1, Retain: true, Topic: "a"}, WillMsgReq{}, WillMsg{Payload: []byte("x")},
+		Advertise{GwID: 1, Duration: 900}, Searchgw{}, Searchgw{Radius: 2, HasRadius: true}, Gwinfo{GwID: 3},
+		Gwinfo{GwID: 3, Address: []byte{10, 0, 0, 1}},
 	} {
 		b, _ := Encode(m)
 		f.Add(b)
@@ -374,6 +414,10 @@ func FuzzDecode(f *testing.F) {
 	f.Add([]byte{7, 0x14, 0x02, 0x00, 0x01, 'a', 'b'})
 	f.Add([]byte{8, 0x0C, 0x02, 0x00, 0x00, 0x00, 0x01, 'x'})
 	f.Add([]byte{4, 0x15, 0x00, 0x01})
+	f.Add([]byte{5, 0x00, 0x01, 0x00, 0x0E})
+	f.Add([]byte{3, 0x01, 0x00})
+	f.Add([]byte{4, 0x02, 0x01, 0x0A})
+	f.Add([]byte{2, 0x02})
 	f.Fuzz(func(t *testing.T, data []byte) {
 		_, _ = Decode(data)
 	})

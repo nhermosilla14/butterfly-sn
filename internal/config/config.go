@@ -19,6 +19,7 @@ type Config struct {
 	Broker     string `yaml:"broker"`      // MQTT broker TCP host:port
 	MaxClients int    `yaml:"max_clients"` // maximum simultaneous sessions
 	LogLevel   string `yaml:"log_level"`   // debug, info, warn or error
+	GatewayID  int    `yaml:"gateway_id"`  // 1-255, sent in GWINFO
 }
 
 var logLevels = map[string]slog.Level{
@@ -40,7 +41,7 @@ func Load(path string) (Config, error) {
 
 // Parse reads and validates a YAML configuration. Absent keys take their defaults.
 func Parse(r io.Reader) (Config, error) {
-	cfg := Config{MaxClients: 100, LogLevel: "info"}
+	cfg := Config{MaxClients: 100, LogLevel: "info", GatewayID: 1}
 	dec := yaml.NewDecoder(r)
 	dec.KnownFields(true)
 	if err := dec.Decode(&cfg); err != nil && !errors.Is(err, io.EOF) {
@@ -69,6 +70,9 @@ func (c Config) validate() error {
 	}
 	if _, ok := logLevels[c.LogLevel]; !ok {
 		return fmt.Errorf("config: log_level: must be one of debug, info, warn, error; got %q", c.LogLevel)
+	}
+	if c.GatewayID < 1 || c.GatewayID > 255 {
+		return fmt.Errorf("config: gateway_id: must be between 1 and 255, got %d", c.GatewayID)
 	}
 	return nil
 }

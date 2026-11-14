@@ -38,6 +38,10 @@ keepalive, broker-loss handling, will handling, and sleep with buffered downlink
   WILLMSGREQ, WILLMSG. An empty will topic skips the message prompt and connects without a will; a QoS 2 will
   gets CONNACK Not supported. The whole handshake has a 10 second timeout; on timeout the session is removed
   and the client gets DISCONNECT. The collected will travels in the broker CONNECT.
+- SEARCHGW from any sender is answered with one unicast GWINFO (configured `gateway_id`) after a random 0-500 ms
+  delay; the radius is ignored. GWINFO and ADVERTISE from clients are ignored. Discovery is handled before
+  session lookup, never creates a session and never contacts the broker. A pending reply is joined by `Run`
+  before the socket closes, so none outlives shutdown.
 - Any other valid packet from an address with no live session gets DISCONNECT; DISCONNECT itself is ignored
   there to avoid an answer loop. This is also the case for a client whose session just ended.
 - REGISTER adds the exact topic name to the session's table and answers REGACK. New ids are allocated from 1 to

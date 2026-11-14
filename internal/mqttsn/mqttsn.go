@@ -7,6 +7,9 @@ import (
 )
 
 const (
+	msgAdvertise    = 0x00
+	msgSearchgw     = 0x01
+	msgGwinfo       = 0x02
 	msgConnect      = 0x04
 	msgConnack      = 0x05
 	msgRegister     = 0x0A
@@ -59,10 +62,30 @@ var (
 	ErrUnsupported = errors.New("mqttsn: unsupported message type")
 )
 
-// Message is one decoded MQTT-SN message: Connect, Connack, Register, Regack, Publish, Puback, Subscribe,
-// Suback, Unsubscribe, Unsuback, Pingreq, Pingresp, Disconnect, WillTopicReq, WillTopic, WillMsgReq or WillMsg.
+// Message is one decoded MQTT-SN message: Advertise, Searchgw, Gwinfo, Connect, Connack, Register, Regack,
+// Publish, Puback, Subscribe, Suback, Unsubscribe, Unsuback, Pingreq, Pingresp, Disconnect, WillTopicReq,
+// WillTopic, WillMsgReq or WillMsg.
 type Message interface {
 	isMessage()
+}
+
+// Advertise is an ADVERTISE message: the gateway id and the interval, in seconds, until the next one.
+type Advertise struct {
+	GwID     byte
+	Duration uint16
+}
+
+// Searchgw is a SEARCHGW message from a client looking for a gateway. Radius is only present when HasRadius
+// is set.
+type Searchgw struct {
+	Radius    byte
+	HasRadius bool
+}
+
+// Gwinfo is a GWINFO message answering a Searchgw. Address is optional and nil when absent.
+type Gwinfo struct {
+	GwID    byte
+	Address []byte
 }
 
 // Connect is a CONNECT message. Will tells the gateway that the will handshake must run before the broker.
@@ -175,6 +198,9 @@ type WillMsg struct {
 	Payload []byte
 }
 
+func (Advertise) isMessage()    {}
+func (Searchgw) isMessage()     {}
+func (Gwinfo) isMessage()       {}
 func (Connect) isMessage()      {}
 func (Connack) isMessage()      {}
 func (Register) isMessage()     {}
@@ -198,6 +224,17 @@ func Encode(m Message) ([]byte, error) {
 	var typ byte
 	var body []byte
 	switch m := m.(type) {
+	case Advertise:
+		typ = msgAdvertise
+		body = []byte{m.GwID, byte(m.Duration >> 8), byte(m.Duration)}
+	case Searchgw:
+		typ = msgSearchgw
+		if m.HasRadius {
+			body = []byte{m.Radius}
+		}
+	case Gwinfo:
+		typ = msgGwinfo
+		body = append([]byte{m.GwID}, m.Address...)
 	case Connect:
 		typ = msgConnect
 		var flags byte
@@ -332,6 +369,25 @@ func Decode(data []byte) (Message, error) {
 	}
 	typ, body := data[hdr], data[hdr+1:]
 	switch typ {
+	case msgAdvertise:
+		if len(body) != 3 {
+			return nil, ErrMalformed
+		}
+		return Advertise{GwID: body[0], Duration: uint16(body[1])<<8 | uint16(body[2])}, nil
+	case msgSearchgw:
+		switch len(body) {
+		case 0:
+			return Searchgw{}, nil
+		case 1:
+			return Searchgw{Radius: body[0], HasRadius: true}, nil
+		}
+		return nil, ErrMalformed
+	case msgGwinfo:
+		if len(body) < 1 {
+			return nil, ErrMalformed
+		}
+		// Address is copied: data aliases the caller's read buffer, which is reused.
+		return Gwinfo{GwID: body[0], Address: append([]byte(nil), body[1:]...)}, nil
 	case msgConnect:
 		if len(body) < 4 || body[1] != protocolID {
 			return nil, ErrMalformed

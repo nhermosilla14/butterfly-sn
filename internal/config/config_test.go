@@ -2,6 +2,7 @@ package config
 
 import (
 	"log/slog"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -11,7 +12,7 @@ func TestParseDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.MaxClients != 100 || cfg.LogLevel != "info" || cfg.SlogLevel() != slog.LevelInfo {
+	if cfg.MaxClients != 100 || cfg.LogLevel != "info" || cfg.SlogLevel() != slog.LevelInfo || cfg.GatewayID != 1 {
 		t.Fatalf("defaults: %+v", cfg)
 	}
 }
@@ -37,11 +38,26 @@ func TestParseErrors(t *testing.T) {
 		"max negative":     {"listen: 127.0.0.1:0\nbroker: 127.0.0.1:1883\nmax_clients: -1\n", "max_clients"},
 		"bad level":        {"listen: 127.0.0.1:0\nbroker: 127.0.0.1:1883\nlog_level: trace\n", "log_level"},
 		"syntax":           {"listen: [\n", "config"},
+		"gateway id zero":  {"listen: 127.0.0.1:0\nbroker: 127.0.0.1:1883\ngateway_id: 0\n", "gateway_id"},
+		"gateway id neg":   {"listen: 127.0.0.1:0\nbroker: 127.0.0.1:1883\ngateway_id: -1\n", "gateway_id"},
+		"gateway id 256":   {"listen: 127.0.0.1:0\nbroker: 127.0.0.1:1883\ngateway_id: 256\n", "gateway_id"},
 	}
 	for name, tc := range cases {
 		_, err := Parse(strings.NewReader(tc.yaml))
 		if err == nil || !strings.Contains(err.Error(), tc.key) {
 			t.Errorf("%s: got %v, want error mentioning %q", name, err, tc.key)
+		}
+	}
+}
+
+func TestParseGatewayIDBounds(t *testing.T) {
+	for _, id := range []string{"1", "255"} {
+		cfg, err := Parse(strings.NewReader("listen: 127.0.0.1:0\nbroker: 127.0.0.1:1883\ngateway_id: " + id + "\n"))
+		if err != nil {
+			t.Fatalf("gateway_id %s: %v", id, err)
+		}
+		if strconv.Itoa(cfg.GatewayID) != id {
+			t.Fatalf("gateway_id %s parsed as %d", id, cfg.GatewayID)
 		}
 	}
 }

@@ -1,5 +1,6 @@
 # Periodic ADVERTISE
 
+- Status: In progress
 - Intents: 20261114-discovery
 - ADRs: 20261114-gateway-discovery
 - Depends on: 01
