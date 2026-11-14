@@ -1,6 +1,6 @@
 # Downlink publishes and gateway registration
 
-- Status: In progress
+- Status: Done
 - Intents: 20261114-downlink-pubsub
 - ADRs: 20261114-broker-event-stream-downlink, 20261114-downlink-delivery-and-topics
 - Depends on: 01

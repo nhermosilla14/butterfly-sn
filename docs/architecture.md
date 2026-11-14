@@ -1,8 +1,8 @@
 # Architecture
 
-Current state after slice 01 of downlink pub/sub (connect, registered-topic QoS 0 and QoS 1 publish, disconnect,
-bad-input handling, client timeouts, broker keepalive, broker-loss handling, will handling, and client
-subscriptions). Decisions: `docs/adr/` and `docs/branch/adr/`.
+Current state after slice 02 of downlink pub/sub (connect, registered-topic QoS 0 and QoS 1 publish in both
+directions, disconnect, bad-input handling, client timeouts, broker keepalive, broker-loss handling, will
+handling, and subscriptions with gateway topic registration). Decisions: `docs/adr/` and `docs/branch/adr/`.
 
 ```
  MQTT-SN client --UDP--> [ router ] --inbox--> [ session goroutine ] --TCP--> MQTT broker
@@ -49,8 +49,12 @@ subscriptions). Decisions: `docs/adr/` and `docs/branch/adr/`.
   that id arrives. Broker acknowledgements with an unknown id are logged and ignored.
 - SUBSCRIBE and UNSUBSCRIBE are forwarded on the client's broker connection with the client's msg id as the MQTT
   packet id. SUBACK reports the granted QoS, the table id for an exact name and 0 for a wildcard; UNSUBACK copies
-  the msg id. The broker reader also reads SUBACK, UNSUBACK and PUBLISH events; downlink delivery is the next
-  slice.
+  the msg id.
+- A broker PUBLISH for a topic in the client's table becomes an MQTT-SN PUBLISH with that id. An unknown topic
+  gets a gateway REGISTER and the PUBLISH is held (at most 20 per session) until REGACK; a rejected
+  registration forgets the name so a later publish registers it again with a fresh id. Downlink QoS 1 reuses
+  the broker packet id as msg id and acknowledges the broker only after the client PUBACK.
+- The table holds at most 50 names per client, with monotonic ids that are not reused until the counter wraps.
 - Each session has one broker reader goroutine. It reads broker events in arrival order (PUBACK, PINGRESP,
   DISCONNECT, and later downlink traffic) and feeds them into the same serialized session stream, so the
   session goroutine never blocks on a synchronous broker read.

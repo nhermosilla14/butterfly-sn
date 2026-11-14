@@ -30,10 +30,17 @@ bug and short-topic special cases that read past one-character names.
      QoS, retain and DUP, and no REGISTER.
   2. Else if the topic is in the table, send a PUBLISH with its id.
   3. Else allocate an id, send a gateway REGISTER with a per-session msg id (1..65535, never 0), and hold the
-     PUBLISH until REGACK. Accepted releases the held PUBLISH; rejected or an unknown id drops it.
+     PUBLISH until REGACK. Accepted releases the held PUBLISH. Rejected drops it, acknowledges QoS 1 to the
+     broker and removes the name from the table, so a later broker publish registers it again with a fresh id
+     instead of reusing an id the client refused. An unknown REGACK id is logged and ignored.
   4. If the table is full, drop the PUBLISH, log, and for QoS 1 acknowledge the broker.
 - Holds are bounded per client (20 messages). Overflow drops the message and, for QoS 1, acknowledges the broker.
   A second publish for a topic already awaiting REGACK joins the same hold.
+- Topic ids are allocated monotonically and never reused after a name is removed, while at most 50 names are
+  live at once.
+- A QoS 1 PUBLISH whose broker packet id is still awaiting the client's PUBACK is dropped and logged without
+  acknowledging the broker: that id belongs to the in-flight message, and acknowledging it would acknowledge
+  the wrong delivery.
 - Downlink QoS 1 PUBLISH uses the broker packet id as the MQTT-SN msg id. The gateway sends MQTT PUBACK only
   after the client's PUBACK Accepted, which is the same ordering rule as uplink. A rejected PUBACK drops the
   pending entry, logs and still acknowledges the broker so it does not retry forever.

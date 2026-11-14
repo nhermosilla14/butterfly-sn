@@ -1,5 +1,6 @@
 # Short topic names
 
+- Status: In progress
 - Intents: 20261114-downlink-pubsub
 - ADRs: 20261114-downlink-delivery-and-topics
 - Depends on: 02

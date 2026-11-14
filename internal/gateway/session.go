@@ -32,6 +32,15 @@ type session struct {
 	pendingSubs map[uint16]uint16
 	// pendingUnsubs holds the msg id of each UNSUBSCRIBE awaiting the broker's UNSUBACK.
 	pendingUnsubs map[uint16]struct{}
+	// regMsgID is the last gateway REGISTER msg id issued; see nextRegMsgID.
+	regMsgID uint16
+	// pendingRegs maps the msg id of each gateway REGISTER awaiting REGACK to its held PUBLISHes, and
+	// regByTopic maps each topic awaiting REGACK to that msg id. See downlink.go.
+	pendingRegs map[uint16]*pendingReg
+	regByTopic  map[string]uint16
+	// pendingDownlink maps the broker packet id of each QoS 1 PUBLISH sent to the client, awaiting the
+	// client's PUBACK, to the topic id sent. The broker is acknowledged only after that PUBACK.
+	pendingDownlink map[uint16]uint16
 	// lastWrite is when the broker connection was last written successfully (CONNECT, PUBLISH, PINGREQ).
 	// Reads do not count. Only the session goroutine touches it.
 	lastWrite time.Time
@@ -97,6 +106,9 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 	s.pending = make(map[uint16]uint16)
 	s.pendingSubs = make(map[uint16]uint16)
 	s.pendingUnsubs = make(map[uint16]struct{})
+	s.pendingRegs = make(map[uint16]*pendingReg)
+	s.regByTopic = make(map[string]uint16)
+	s.pendingDownlink = make(map[uint16]uint16)
 	if c.Will && !s.awaitWill(ctx, log) {
 		return
 	}
@@ -167,7 +179,10 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 				s.loseBroker(log, errBrokerDisconnect)
 				return
 			}
-			s.handleBrokerEvent(e.event, log)
+			if err := s.handleBrokerEvent(broker, e.event, log); err != nil {
+				s.loseBroker(log, err)
+				return
+			}
 		case <-keepaliveDue:
 			if err := s.keepaliveDue(broker, interval, keepalive); err != nil {
 				s.loseBroker(log, err)
@@ -200,6 +215,16 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 				return
 			case mqttsn.Register:
 				s.handleRegister(m, log)
+			case mqttsn.Regack:
+				if err := s.handleRegack(broker, m, log); err != nil {
+					s.loseBroker(log, err)
+					return
+				}
+			case mqttsn.Puback:
+				if err := s.handleClientPuback(broker, m, log); err != nil {
+					s.loseBroker(log, err)
+					return
+				}
 			case mqttsn.Publish:
 				if err := s.handlePublish(broker, m, log); err != nil {
 					s.loseBroker(log, err)
@@ -332,15 +357,15 @@ func (s *session) readBroker(ctx context.Context, broker *mqtt.Client, events ch
 }
 
 // handleBrokerEvent handles one broker packet. A PUBACK is sent to the client once the broker has
-// acknowledged the matching PUBLISH.
-func (s *session) handleBrokerEvent(e mqtt.Event, log *slog.Logger) {
+// acknowledged the matching PUBLISH. An error means a write to the broker failed and the broker connection is lost.
+func (s *session) handleBrokerEvent(broker *mqtt.Client, e mqtt.Event, log *slog.Logger) error {
 	switch e.Kind {
 	case mqtt.EventPuback:
 		id := e.PacketID
 		topicID, ok := s.pending[id]
 		if !ok {
 			log.Warn("ignored broker PUBACK for unknown packet id", "packet_id", id)
-			return
+			return nil
 		}
 		delete(s.pending, id)
 		s.gw.sendTo(s.addr, mqttsn.Puback{TopicID: topicID, MsgID: id, ReturnCode: mqttsn.ReturnAccepted})
@@ -349,11 +374,11 @@ func (s *session) handleBrokerEvent(e mqtt.Event, log *slog.Logger) {
 	case mqtt.EventUnsuback:
 		s.handleUnsuback(e, log)
 	case mqtt.EventPublish:
-		// Downlink delivery is not implemented yet; the message is dropped without payload logging.
-		log.Debug("ignored broker PUBLISH: downlink delivery not implemented")
+		return s.handleDownlink(broker, e, log)
 	case mqtt.EventPingresp:
 		s.pingOutstanding = false
 	}
+	return nil
 }
 
 // keepaliveDue runs when the keepalive timer fires. It pings the broker if nothing was written for a whole

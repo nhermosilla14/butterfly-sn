@@ -3,8 +3,8 @@
 A transparent MQTT-SN v1.2 gateway written in Go. It lets UDP-based MQTT-SN clients talk to a plain MQTT
 broker, replacing a patched Eclipse Paho MQTT-SN gateway. See [docs/vision.md](docs/vision.md).
 
-Status: early development (connect, registered-topic QoS 0 and QoS 1 publish, disconnect, bad-input handling,
-broker keepalive, client timeouts, broker-loss handling and will handshake/publication work).
+Status: early development (connect, QoS 0 and QoS 1 publish in both directions, subscriptions, disconnect,
+bad-input handling, broker keepalive, client timeouts, broker-loss handling and will handling work).
 
 ## Prerequisites
 - Go 1.27 or newer
