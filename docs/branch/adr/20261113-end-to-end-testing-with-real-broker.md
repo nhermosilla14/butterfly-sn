@@ -19,7 +19,7 @@ so it is useful for manual compatibility checks but not for the automated suite.
   Setting `BUTTERFLY_E2E_BROKER=<host:port>` uses an existing broker instead.
 - The MQTT-SN client in tests is a small helper in `test/e2e` built on `internal/mqttsn` that sends raw
   datagrams and expects replies with timeouts. A separate observer connects to the broker as a plain MQTT client
-  using `internal/mqtt` to check what arrived.
+  using `mqtt311` to check what arrived.
 - Manual compatibility check, documented in the README: run the gateway and use `mqtt-sn-pub` from
   `mqtt-sn-tools` against it. Not automated.
 - Unit tests live next to the code (codec round-trips, state machines); fuzz targets for both codecs.

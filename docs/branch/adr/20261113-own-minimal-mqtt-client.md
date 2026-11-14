@@ -13,7 +13,7 @@ their own reconnects, session state and message ids, which gets in the way of a 
 pull in dependencies.
 
 ## Decision
-The broker side speaks MQTT 3.1.1 only; MQTT 5 is not planned. Implement a small MQTT 3.1.1 packet codec and connection in `internal/mqtt`, standard library only. In scope
+The broker side speaks MQTT 3.1.1 only; MQTT 5 is not planned. Implement a small MQTT 3.1.1 packet codec and connection as the standalone module `mqtt311/` (not under `internal/`, so it can later move to its own repository; see the package layout ADR), standard library only, with no knowledge of MQTT-SN or the gateway. In scope
 now: CONNECT, CONNACK, PUBLISH, PUBACK, PINGREQ, PINGRESP, DISCONNECT. SUBSCRIBE, SUBACK, UNSUBSCRIBE,
 UNSUBACK and PUBREC/PUBREL/PUBCOMP are added by later intents. Packets are read from the TCP stream with full
 framing (the fixed header's variable-length size is read, then exactly that many bytes), fixing the old

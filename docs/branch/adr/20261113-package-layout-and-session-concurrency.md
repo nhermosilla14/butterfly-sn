@@ -15,8 +15,16 @@ Module `github.com/nhermosilla14/butterfly-sn`. Layout:
 - `cmd/butterfly-sn`: main, flags (`-config`), signal handling.
 - `internal/config`: YAML loading and validation.
 - `internal/mqttsn`: MQTT-SN packet codec (encode/decode, no I/O). Pure functions, fuzzable.
-- `internal/mqtt`: minimal MQTT 3.1.1 client codec and connection (see ADR on the broker client).
+- `mqtt311/`: the MQTT 3.1.1 library, a separate Go module (see below and the ADR on the broker client).
 - `internal/gateway`: UDP server and sessions.
+
+The MQTT library is built to be extracted into its own repository later. It lives at `mqtt311/` with its own
+`go.mod` (module `github.com/nhermosilla14/mqtt311`, final name to be confirmed on extraction), its own
+README, tests and fuzz targets. Rules: standard library only; it never imports the gateway or any other
+package of this repo; its API is public and documented, with no gateway concepts (client ids, sessions,
+MQTT-SN) in it. The root `go.mod` requires it and points to the local directory with a `replace` directive, so
+builds work with or without a workspace. Extraction is then: move the directory to a new repo, tag it, and
+delete the `replace` line. `internal/mqttsn` stays internal for now.
 
 Concurrency: one goroutine reads the UDP socket and routes each datagram, by sender address, to the inbox
 channel of that client's session. Each session runs one goroutine that owns all its state (state, topic table,
@@ -33,6 +41,6 @@ DISCONNECT).
 - Locked shared session map with callbacks — more races, harder to test.
 
 ## Consequences
-Per-client isolation and easy reasoning about session state. Roughly three goroutines per client, which is fine for
+The MQTT library has a stable public surface from the start, which needs care with API design and versioning (start at v0). Per-client isolation and easy reasoning about session state. Roughly three goroutines per client, which is fine for
 about 100 clients. The router needs a concurrency-safe address-to-session map, and sessions must be removed
 from it when they end.
