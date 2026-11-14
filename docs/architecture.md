@@ -1,7 +1,7 @@
 # Architecture
 
-Current state after slice 03 (connect, registered-topic QoS 0 and QoS 1 publish, disconnect and bad-input
-handling). Decisions: `docs/adr/` and `docs/branch/adr/`.
+Current state after slice 01 of session liveness (connect, registered-topic QoS 0 and QoS 1 publish, disconnect,
+bad-input handling and gateway-side broker keepalive). Decisions: `docs/adr/` and `docs/branch/adr/`.
 
 ```
  MQTT-SN client --UDP--> [ router ] --inbox--> [ session goroutine ] --TCP--> MQTT broker
@@ -10,7 +10,8 @@ handling). Decisions: `docs/adr/` and `docs/branch/adr/`.
                                                 |      +-- PUBLISH (writes) --+
                                                 |                             |
                                                 +------- broker reader <------+
-                                                         (PUBACKs and errors)
+                                                         (PUBACK, PINGRESP,
+                                                          DISCONNECT, errors)
 ```
 
 ## Packages
@@ -41,9 +42,14 @@ handling). Decisions: `docs/adr/` and `docs/branch/adr/`.
   msg id as the MQTT packet id on that client's dedicated connection. The session records the outstanding
   id together with its topic id and answer PUBACK Accepted to the client only after the broker PUBACK for
   that id arrives. Broker acknowledgements with an unknown id are logged and ignored.
-- Each session has one broker reader goroutine. It reads broker PUBACKs (and later downlink traffic) and
-  feeds them as events into the same serialized session stream, so the session goroutine never blocks on a
-  synchronous broker read.
+- Each session has one broker reader goroutine. It reads broker events in arrival order (PUBACK, PINGRESP,
+  DISCONNECT, and later downlink traffic) and feeds them into the same serialized session stream, so the
+  session goroutine never blocks on a synchronous broker read.
+- While a session is active, the gateway keeps its broker connection alive: when half the client's CONNECT
+  duration passes without a broker write, it sends an MQTT PINGREQ and expects a PINGRESP. A keepalive of 0
+  disables the pings and asks the broker for no keepalive check.
+- An MQTT DISCONNECT from the broker currently ends the reader and is logged; client notification and session
+  teardown are the next slice.
 - DISCONNECT sends MQTT DISCONNECT to the broker, replies DISCONNECT, and removes the session.
 - On shutdown (context cancel) every session disconnects from the broker, sends DISCONNECT to its client, and the
   socket closes. Closing the broker connection unblocks the reader; the session cancels it and waits for it to

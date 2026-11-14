@@ -1,6 +1,6 @@
 // Package mqtt is a minimal MQTT 3.1.1 client: it connects over TCP, sends CONNECT, DISCONNECT,
-// QoS 0 PUBLISH and SUBSCRIBE (QoS 0) and reads CONNACK, SUBACK and QoS 0 PUBLISH. It has no
-// knowledge of any gateway or other protocol.
+// QoS 0 and QoS 1 PUBLISH, PINGREQ and SUBSCRIBE (QoS 0), and reads CONNACK, PUBACK, PINGRESP,
+// SUBACK, DISCONNECT and QoS 0 PUBLISH. It has no knowledge of any gateway or other protocol.
 package mqtt
 
 import (

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"time"
 
 	mqtt "github.com/nhermosilla14/butterfly-mqtt-client"
 	"github.com/nhermosilla14/butterfly-sn/internal/mqttsn"
@@ -20,13 +21,24 @@ type session struct {
 	// pending maps the msg id of each QoS 1 PUBLISH still awaiting the broker's PUBACK to its topic id.
 	// The broker packet id is the client's msg id, so no translation is needed.
 	pending map[uint16]uint16
+	// lastWrite is when the broker connection was last written successfully (CONNECT, PUBLISH, PINGREQ).
+	// Reads do not count. Only the session goroutine touches it.
+	lastWrite time.Time
+	// pingOutstanding is set while a PINGREQ awaits its PINGRESP.
+	pingOutstanding bool
 }
 
-// brokerAck is one result read from the broker connection: a PUBACK packet id, or the read error that
+// brokerEvent is one result read from the broker connection: a broker packet, or the read error that
 // ended the reader.
-type brokerAck struct {
-	id  uint16
-	err error
+type brokerEvent struct {
+	event mqtt.Event
+	err   error
+}
+
+// keepaliveInterval is how long the broker may stay silent before the gateway pings it: half the client's
+// CONNECT duration, so the ping goes out well before the broker's 1.5x limit. Zero disables pings.
+func keepaliveInterval(duration uint16) time.Duration {
+	return time.Duration(duration) * time.Second / 2
 }
 
 // deliver hands a datagram to the session without blocking the router.
@@ -69,9 +81,19 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 	defer readers.Wait()
 	defer stopReader()
 	defer broker.Close()
-	acks := make(chan brokerAck)
+	events := make(chan brokerEvent)
 	readers.Add(1)
-	go s.readBroker(readerCtx, broker, acks, &readers)
+	go s.readBroker(readerCtx, broker, events, &readers)
+
+	// The keepalive timer is armed only when the client asked for one; a nil channel never fires.
+	interval := keepaliveInterval(c.Duration)
+	var keepalive *time.Timer
+	var keepaliveDue <-chan time.Time
+	if interval > 0 {
+		keepalive = time.NewTimer(interval)
+		defer keepalive.Stop()
+		keepaliveDue = keepalive.C
+	}
 
 	for {
 		select {
@@ -80,8 +102,10 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 			s.gw.sendTo(s.addr, mqttsn.Disconnect{})
 			log.Info("client closed by shutdown")
 			return
-		case a := <-acks:
-			s.handleBrokerAck(a, log)
+		case e := <-events:
+			s.handleBrokerEvent(e, log)
+		case <-keepaliveDue:
+			s.keepaliveDue(broker, interval, keepalive, log)
 		case m := <-s.inbox:
 			switch m := m.(type) {
 			case mqttsn.Disconnect:
@@ -101,36 +125,66 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 	}
 }
 
-// readBroker reads PUBACKs from the broker and hands them to the session loop. It ends after a read
-// error, which it sends first, or when ctx is cancelled.
-func (s *session) readBroker(ctx context.Context, broker *mqtt.Client, acks chan<- brokerAck, readers *sync.WaitGroup) {
+// readBroker reads broker packets in arrival order and hands them to the session loop. It ends after a
+// read error or an MQTT DISCONNECT, which it sends first, or when ctx is cancelled.
+func (s *session) readBroker(ctx context.Context, broker *mqtt.Client, events chan<- brokerEvent, readers *sync.WaitGroup) {
 	defer readers.Done()
 	for {
-		id, err := broker.ReadPuback(ctx)
+		ev, err := broker.ReadEvent(ctx)
 		select {
-		case acks <- brokerAck{id: id, err: err}:
+		case events <- brokerEvent{event: ev, err: err}:
 		case <-ctx.Done():
 			return
 		}
-		if err != nil {
+		if err != nil || ev.Kind == mqtt.EventDisconnect {
 			return
 		}
 	}
 }
 
-// handleBrokerAck sends the client its PUBACK once the broker has acknowledged the matching PUBLISH.
-func (s *session) handleBrokerAck(a brokerAck, log *slog.Logger) {
-	if a.err != nil {
-		log.Warn("broker connection read failed, no more broker PUBACKs will be read", "error", a.err)
+// handleBrokerEvent handles one broker packet. A PUBACK is sent to the client once the broker has
+// acknowledged the matching PUBLISH.
+func (s *session) handleBrokerEvent(e brokerEvent, log *slog.Logger) {
+	if e.err != nil {
+		log.Warn("broker connection read failed, no more broker packets will be read", "error", e.err)
 		return
 	}
-	topicID, ok := s.pending[a.id]
-	if !ok {
-		log.Warn("ignored broker PUBACK for unknown packet id", "packet_id", a.id)
+	switch e.event.Kind {
+	case mqtt.EventPuback:
+		id := e.event.PacketID
+		topicID, ok := s.pending[id]
+		if !ok {
+			log.Warn("ignored broker PUBACK for unknown packet id", "packet_id", id)
+			return
+		}
+		delete(s.pending, id)
+		s.gw.sendTo(s.addr, mqttsn.Puback{TopicID: topicID, MsgID: id, ReturnCode: mqttsn.ReturnAccepted})
+	case mqtt.EventPingresp:
+		s.pingOutstanding = false
+	case mqtt.EventDisconnect:
+		log.Warn("broker sent MQTT DISCONNECT, no more broker packets will be read")
+	}
+}
+
+// keepaliveDue runs when the keepalive timer fires. It pings the broker if nothing was written for a whole
+// interval and re-arms the timer. A PINGREQ still unanswered when the next one is due is only logged.
+func (s *session) keepaliveDue(broker *mqtt.Client, interval time.Duration, timer *time.Timer, log *slog.Logger) {
+	if s.pingOutstanding {
+		log.Warn("broker PINGRESP missing", "interval", interval)
+		timer.Reset(interval)
 		return
 	}
-	delete(s.pending, a.id)
-	s.gw.sendTo(s.addr, mqttsn.Puback{TopicID: topicID, MsgID: a.id, ReturnCode: mqttsn.ReturnAccepted})
+	if idle := time.Since(s.lastWrite); idle < interval {
+		timer.Reset(interval - idle)
+		return
+	}
+	timer.Reset(interval)
+	if err := broker.Pingreq(); err != nil {
+		log.Warn("broker PINGREQ failed", "error", err)
+		return
+	}
+	s.lastWrite = time.Now()
+	s.pingOutstanding = true
 }
 
 func (s *session) handleRegister(m mqttsn.Register, log *slog.Logger) {
@@ -161,7 +215,9 @@ func (s *session) handlePublish(broker *mqtt.Client, m mqttsn.Publish, log *slog
 	}
 	if err := broker.Publish(name, m.Data, m.Retain); err != nil {
 		log.Warn("publish to broker failed", "topic", name, "error", err)
+		return
 	}
+	s.lastWrite = time.Now()
 }
 
 // publishQoS1 sends the PUBLISH to the broker. The client's PUBACK follows only once the broker acknowledges it.
@@ -179,6 +235,7 @@ func (s *session) publishQoS1(broker *mqtt.Client, m mqttsn.Publish, name string
 		log.Warn("QoS 1 publish to broker failed", "topic", name, "error", err)
 		return
 	}
+	s.lastWrite = time.Now()
 	s.pending[m.MsgID] = m.TopicID
 }
 
@@ -194,5 +251,6 @@ func (s *session) connectBroker(ctx context.Context, c mqttsn.Connect) (*mqtt.Cl
 		_ = cl.Close()
 		return nil, err
 	}
+	s.lastWrite = time.Now()
 	return cl, nil
 }
