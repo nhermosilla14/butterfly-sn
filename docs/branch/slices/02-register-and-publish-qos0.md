@@ -1,5 +1,6 @@
 # Register a topic and publish at QoS 0
 
+- Status: In progress
 - Intents: 20261113-walking-skeleton
 - ADRs: 20261113-package-layout-and-session-concurrency, 20261113-own-minimal-mqtt-client, 20261113-end-to-end-testing-with-real-broker
 - Depends on: 01
