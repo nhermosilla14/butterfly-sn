@@ -1,6 +1,6 @@
 # Sleep state, buffering and wake-up flush
 
-- Status: Accepted
+- Status: Superseded by 20261114-sleep-state-buffer-flush-and-resleep
 - Date: 2026-11-14
 - Deciders: Nicolás Hermosilla
 - Approved by: Nicolás Hermosilla

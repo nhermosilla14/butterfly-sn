@@ -71,7 +71,11 @@ acknowledged at buffering time instead (see [sleep.md](sleep.md)).
     deliveries are bounded at 20 each.
   - A duplicate in-flight QoS 1 packet id is dropped without acknowledging the broker, and unknown REGACK or
     client PUBACK ids are ignored.
-- Tests: TestDownlinkSubscribedTopicDeliveredWithoutRegister, TestDownlinkKnownTopicForwardedWithoutRegister, TestDownlinkWildcardUnregisteredTopicRegistersFirst, TestDownlinkUnknownTopicRegistersThenReleasesOnAccept, TestDownlinkQoS1AcknowledgedByClientAndFlowContinues, TestDownlinkQoS1BrokerPubackAfterClientPuback, TestDownlinkRegackRejectedDropsAndAcksQoS1, TestDownlinkRejectedRegistrationForgetsNameAndRegistersAgain, TestDownlinkSecondPublishJoinsPendingRegistration, TestDownlinkHoldFullDropsAndAcksQoS1, TestDownlinkTableFullDropsAndAcksQoS1, TestDownlinkFullTableDropsNewTopicWithoutRegister, TestDownlinkDuplicateQoS1IDDroppedWithoutSecondAck, TestDownlinkPendingFullAcksBrokerWithoutSending, TestDownlinkUnknownRegackAndPubackIgnored, TestDownlinkBrokerAckWriteFailureIsError
+  - A message whose MQTT-SN datagram would exceed one UDP datagram (65 507 bytes of payload on IPv4) is dropped
+    and logged with its size only, never retransmitted, and a QoS 1 one is acknowledged to the broker; an
+    oversize REGISTER drops its held messages and forgets the topic name. The client stays connected, its will is
+    not published, and later messages are delivered.
+- Tests: TestOversizeQoS1DownlinkDroppedAckedNotRetried, TestOversizeQoS0DownlinkDropped, TestOversizeRegisterDropsHeldAndForgetsName, TestDownlinkSubscribedTopicDeliveredWithoutRegister, TestDownlinkKnownTopicForwardedWithoutRegister, TestDownlinkWildcardUnregisteredTopicRegistersFirst, TestDownlinkUnknownTopicRegistersThenReleasesOnAccept, TestDownlinkQoS1AcknowledgedByClientAndFlowContinues, TestDownlinkQoS1BrokerPubackAfterClientPuback, TestDownlinkRegackRejectedDropsAndAcksQoS1, TestDownlinkRejectedRegistrationForgetsNameAndRegistersAgain, TestDownlinkSecondPublishJoinsPendingRegistration, TestDownlinkHoldFullDropsAndAcksQoS1, TestDownlinkTableFullDropsAndAcksQoS1, TestDownlinkFullTableDropsNewTopicWithoutRegister, TestDownlinkDuplicateQoS1IDDroppedWithoutSecondAck, TestDownlinkPendingFullAcksBrokerWithoutSending, TestDownlinkUnknownRegackAndPubackIgnored, TestDownlinkBrokerAckWriteFailureIsError
 
 ### Downlink retransmission
 A gateway REGISTER or downlink QoS 1 PUBLISH the client does not answer is sent again every `retry_interval`

@@ -8,16 +8,24 @@ wake flushes them.
 ### Sleep entry and expiry
 DISCONNECT with a duration above 0 puts the session to sleep. The broker connection stays open, the active
 inactivity timer is replaced by a sleep timer of 1.5 times the duration, and broker keepalive continues. A client
-asleep past that limit is declared lost and torn down with the will-aware teardown. DISCONNECT from asleep is a
-normal disconnect.
+asleep past that limit is declared lost and torn down with the will-aware teardown. DISCONNECT without a duration
+from asleep is a normal disconnect. DISCONNECT with a duration from a sleeping or awake client is a re-sleep: it
+changes the sleep duration and the client stays asleep (MQTT-SN 6.14).
 - Criteria:
   - Sleep entry replies DISCONNECT and keeps the broker connection open.
   - A sleeping client is not timed out by its CONNECT keepalive, and keepalive pings still go to the broker.
   - Sleep expiry sends the client DISCONNECT, frees the slot and closes the broker connection; a will is published
     when one exists and MQTT DISCONNECT is sent when it does not.
-  - DISCONNECT from asleep ends the session gracefully with no will, including a second duration DISCONNECT.
+  - DISCONNECT without a duration, or with duration 0, from asleep ends the session gracefully with no will.
+  - DISCONNECT with a duration from asleep replaces the sleep duration, restarts the sleep timer at 1.5 times the
+    new duration and gets DISCONNECT; session, broker connection, subscriptions and buffered messages are kept
+    and no will is published. Expiry then follows the new duration.
+  - The same DISCONNECT during a wake-up flush (PINGREQ or CONNECT wake) interrupts it: messages not yet sent,
+    and those held for a pending REGISTER, stay buffered in order without a second broker PUBACK (the buffer
+    still holds at most 20, newest dropped), pending retries are dropped, a late PUBACK of an already sent
+    message is still absorbed, and no PINGRESP is sent for the interrupted flush.
   - Shutdown and broker loss while asleep keep their existing behaviour.
-- Tests: TestSleepEntryKeepsBrokerConnectionAndPings, TestSleepDoesNotTimeOutAtInactivityLimit, TestSleepExpiryWithWillClosesBrokerBare, TestSleepExpiryWithoutWillSendsDisconnect, TestDisconnectWhileAsleepIsNormal, TestSecondSleepDisconnectWhileAsleepIsNormal, TestShutdownWhileAsleepSendsDisconnect, TestSleepExpiryPublishesWillAndFreesSlot, TestSleepKeepsSessionAndDisconnectFreesSlot
+- Tests: TestSleepEntryKeepsBrokerConnectionAndPings, TestSleepDoesNotTimeOutAtInactivityLimit, TestSleepExpiryWithWillClosesBrokerBare, TestSleepExpiryWithoutWillSendsDisconnect, TestDisconnectWhileAsleepIsNormal, TestResleepShorterDurationExpiresOnNewSchedule, TestResleepWhileAsleepKeepsBufferedForNextPingreq, TestResleepMidFlushKeepsOrderWithoutSecondPuback, TestResleepAbsorbsLatePubackOfFlushedQoS1, TestResleepDurationZeroEndsSession, TestResleepDuringConnectWakeFlushReturnsToSleep, TestResleepCapDropsNewestWhenHeldReturns, TestShutdownWhileAsleepSendsDisconnect, TestSleepExpiryPublishesWillAndFreesSlot, TestSleepKeepsSessionAndDisconnectFreesSlot
 
 ### Buffering
 Broker messages for a sleeping client are buffered instead of delivered. QoS 1 is acknowledged to the broker when
@@ -48,9 +56,10 @@ their PUBLISH. Buffered QoS 1 messages use gateway-assigned msg ids and are not 
     to the broker instead of duplicating a client msg id.
   - A REGISTER or PUBLISH of the flush follows the retry rule of [topics-and-pubsub.md](topics-and-pubsub.md): a
     missing REGACK or PUBACK ends in DISCONNECT instead of waiting, and a sleeping client is never retransmitted
-    to. A QoS 1 PUBLISH still unacknowledged when the client sleeps is not resent while it sleeps and is
+    to. A downlink message too large for one UDP datagram is dropped on flush, without ending the flush
+    (see [topics-and-pubsub.md](topics-and-pubsub.md)). A QoS 1 PUBLISH still unacknowledged when the client sleeps is not resent while it sleeps and is
     supervised again, with fresh retries, from the wake-up.
-- Tests: TestRetryFlushMissingRegackEndsWithDisconnect, TestRetrySleepingClientNotRetransmittedOrTimedOut, TestRetrySleepParkedQoS1ResentWithDupAfterWake, TestRetrySleepParkedQoS1SilentAfterWakeDisconnects, TestWakeEmptyPingreqGetsPingrespAndStaysAsleep, TestWakeFlushesQoS0InOrderThenPingresp, TestWakeUnknownTopicRegistersBeforePingresp, TestWakeRejectedRegackDropsBufferedAndFinishes, TestWakeDuringFlushDeliveredAfterBufferedBeforePingresp, TestWakeConnectFlushesAndStaysActive, TestWakeConnectRearmsInactivityWithOriginalDuration, TestWakeRestartsSleepTimerAfterPingreq, TestWakeQoS1GetsGatewayMsgIDAndNoSecondBrokerPuback, TestWakeDuplicateBrokerIDGetsDistinctMsgIDs, TestWakePreAckedCapDropsFurtherQoS1, TestActiveQoS1WithPreAckedIDIsDropped, TestWakePingreqFlushesInOrderThenPingresp, TestWakeWildcardUnregisteredTopicRegistersBeforePingresp, TestWakeConnectFlushesThenDeliversLive
+- Tests: TestOversizeBufferedMessageDroppedOnFlushThenPingresp, TestRetryFlushMissingRegackEndsWithDisconnect, TestRetrySleepingClientNotRetransmittedOrTimedOut, TestRetrySleepParkedQoS1ResentWithDupAfterWake, TestRetrySleepParkedQoS1SilentAfterWakeDisconnects, TestWakeEmptyPingreqGetsPingrespAndStaysAsleep, TestWakeFlushesQoS0InOrderThenPingresp, TestWakeUnknownTopicRegistersBeforePingresp, TestWakeRejectedRegackDropsBufferedAndFinishes, TestWakeDuringFlushDeliveredAfterBufferedBeforePingresp, TestWakeConnectFlushesAndStaysActive, TestWakeConnectRearmsInactivityWithOriginalDuration, TestWakeRestartsSleepTimerAfterPingreq, TestWakeQoS1GetsGatewayMsgIDAndNoSecondBrokerPuback, TestWakeDuplicateBrokerIDGetsDistinctMsgIDs, TestWakePreAckedCapDropsFurtherQoS1, TestActiveQoS1WithPreAckedIDIsDropped, TestWakePingreqFlushesInOrderThenPingresp, TestWakeWildcardUnregisteredTopicRegistersBeforePingresp, TestWakeConnectFlushesThenDeliversLive
 
 ## Not supported
 - Retransmission of PINGREQ towards the client.

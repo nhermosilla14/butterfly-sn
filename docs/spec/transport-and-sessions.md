@@ -28,6 +28,23 @@ The CONNECT duration is the client keepalive; 0 disables supervision.
   - DISCONNECT gets DISCONNECT in reply and the broker connection is closed.
 - Tests: TestConnectAccepted, TestConnectBrokerUnreachable, TestDisconnect
 
+### Reconnect from the same address
+A CONNECT from an address that already has an active session replaces that session, so a client that rebooted
+on the same port connects at once. The old broker connection ends with MQTT DISCONNECT, so no will is
+published (the client is reconnecting, not lost), and the client gets no DISCONNECT for the old session. The new
+CONNECT runs the normal path: will handshake if requested, new broker connection, new duration, CONNACK. The
+slot is reused, so `max_clients` counts one session. A CONNECT that arrived before the session's own CONNACK (a
+retransmission queued while the broker was dialled) and one during the will handshake are ignored. A CONNECT from
+a sleeping client keeps its wake meaning (see [sleep.md](sleep.md)), and a CONNECT with an empty client id from an
+active client is ignored.
+- Criteria:
+  - A second CONNECT from the same address gets CONNACK on a new broker connection; the old one is closed with
+    no will published and no DISCONNECT reaches the client.
+  - The new duration and will apply; the old will does not.
+  - It works with keep-alive 0 and when `max_clients` is already reached by that session.
+  - A CONNECT queued before CONNACK yields exactly one CONNACK.
+- Tests: TestReconnectFromSameAddressReplacesSession, TestReconnectNewWillAndDurationApply, TestReconnectWithZeroKeepaliveReplaces, TestReconnectAtMaxClientsOne, TestReconnectReplacementAnswersPingreq, TestReconnectConnectBeforeConnackIgnored
+
 ### Keepalive and liveness
 The CONNECT duration is the client keepalive. The gateway answers PINGREQ from an active client with PINGRESP and
 counts every valid packet as activity. It keeps each broker connection alive on its own with MQTT PINGREQ at
