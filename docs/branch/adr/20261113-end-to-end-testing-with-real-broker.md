@@ -15,9 +15,15 @@ so it is useful for manual compatibility checks but not for the automated suite.
 ## Decision
 - E2E tests live under `test/e2e` and start the gateway in-process (the same code path as `main`, with a config
   file written to a temp dir) on a random UDP port.
-- The broker is a real Mosquitto started as a subprocess on a random port with a generated minimal config
-  (anonymous, loopback only). A test fails with a clear message when `mosquitto` is not on `PATH`; CI installs it.
-  Setting `BUTTERFLY_E2E_BROKER=<host:port>` uses an existing broker instead.
+- The broker is a real Mosquitto (`eclipse-mosquitto:2`) started in a container through `testcontainers-go`, with
+  Podman or Docker as the runtime (Docker is used if `DOCKER_HOST` points to it; for rootless Podman start
+  `podman.socket` and set `DOCKER_HOST=unix:///run/user/$UID/podman/podman.sock`). The container uses a small generated
+  config (anonymous, listener on 1883) and its mapped port is the broker address. Containers are removed after the
+  tests (testcontainers cleanup). A test fails with a clear message when no container runtime is reachable.
+  Setting `BUTTERFLY_E2E_BROKER=<host:port>` uses an existing broker instead (log-based assertions are then skipped).
+  The reason is that a Mosquitto subprocess cannot be reliably cleaned up from a snap-confined `go` (AppArmor denies
+  the signal), which leaves broker processes behind, and AppArmor also blocks the broker from reading a config file
+  outside `/etc/mosquitto`.
 - The MQTT-SN client in tests is a small helper in `test/e2e` built on `internal/mqttsn` that sends raw
   datagrams and expects replies with timeouts. A separate observer connects to the broker as a plain MQTT client
   using `butterfly-mqtt-client` to check what arrived.
@@ -27,10 +33,11 @@ so it is useful for manual compatibility checks but not for the automated suite.
 
 ## Alternatives considered
 - In-process fake broker only — deterministic, but does not prove compatibility with a real broker; it may be added later for failure injection.
-- `testcontainers` or podman-driven brokers — slower and adds a dependency.
+- Mosquitto as a host subprocess — rejected, see above (leaks processes under snap Go, depends on a local install).
+- Driving `podman` through its CLI from the tests — no dependency, but more code to maintain than `testcontainers-go`.
 - `mqtt-sn-tools` as the only test client — too limited.
 
 ## Consequences
-Tests depend on Mosquitto being installed locally and in CI. Test helpers reuse the production codecs, so
+Tests need a container runtime and the `eclipse-mosquitto` image (pulled on first run), locally and in CI. `testcontainers-go` is a test-only dependency with a large transitive graph; it is kept to `test/e2e` imports and its size is to be reviewed (the owner dislikes dependency sprawl), with the CLI-driven option as the fallback. Test helpers reuse the production codecs, so
 codec bugs are also covered by the unit and fuzz tests plus the real broker on the other side. Later intents can
 add a fake broker for failure scenarios.
