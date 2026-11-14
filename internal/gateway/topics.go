@@ -65,3 +65,22 @@ func (t *topicTable) lookup(id uint16) (string, bool) {
 	name, ok := t.names[id]
 	return name, ok
 }
+
+// shortName returns the two-character topic name carried in a short topic id, first byte high. ok is false
+// when either byte is zero, since a name with a zero byte is not a valid topic name.
+func shortName(id uint16) (string, bool) {
+	hi, lo := byte(id>>8), byte(id)
+	if hi == 0 || lo == 0 {
+		return "", false
+	}
+	return string([]byte{hi, lo}), true
+}
+
+// shortID returns the short topic id of a two-character name, first byte high. ok is false unless the name is
+// exactly two bytes with no zero byte.
+func shortID(name string) (uint16, bool) {
+	if len(name) != 2 || name[0] == 0 || name[1] == 0 {
+		return 0, false
+	}
+	return uint16(name[0])<<8 | uint16(name[1]), true
+}

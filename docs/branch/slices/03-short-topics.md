@@ -1,6 +1,6 @@
 # Short topic names
 
-- Status: In progress
+- Status: Done
 - Intents: 20261114-downlink-pubsub
 - ADRs: 20261114-downlink-delivery-and-topics
 - Depends on: 02
@@ -23,6 +23,7 @@ normal registration.
   a short PUBLISH with no REGISTER.
 - A short name of the wrong length is refused with Congestion.
 - A one-character broker topic is delivered via normal REGISTER, not a short PUBLISH.
+- The short-subscription set is capped at 50, and wildcard or empty topic names never reach a broker write.
 - Covers criteria: short publish/subscribe/unsubscribe, downlink short delivery, safe short lengths.
 
 ## Out of scope

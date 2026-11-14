@@ -146,6 +146,10 @@ func TestSubscribeUnsubscribeEncodeBytes(t *testing.T) {
 	if !bytes.Equal(b, []byte{8, 0x14, 0x00, 0x00, 0x05, 'a', '/', '#'}) {
 		t.Fatalf("UNSUBSCRIBE got % x", b)
 	}
+	b, _ = Encode(Unsubscribe{TopicIDType: TopicIDShort, MsgID: 6, TopicName: "ab"})
+	if !bytes.Equal(b, []byte{7, 0x14, 0x02, 0x00, 0x06, 'a', 'b'}) {
+		t.Fatalf("UNSUBSCRIBE short got % x", b)
+	}
 	b, _ = Encode(Unsuback{MsgID: 0x0102})
 	if !bytes.Equal(b, []byte{4, 0x15, 0x01, 0x02}) {
 		t.Fatalf("UNSUBACK got % x", b)
@@ -180,6 +184,21 @@ func TestSubscribeUnsubscribeDecodeBytes(t *testing.T) {
 	wantAck := Suback{QoS: 1, TopicID: 9, MsgID: 3, ReturnCode: 0x80}
 	if err != nil || !reflect.DeepEqual(m, wantAck) {
 		t.Fatalf("SUBACK got %+v, %v; want %+v", m, err, wantAck)
+	}
+	m, err = Decode([]byte{7, 0x12, 0x22, 0x00, 0x04, 'a', 'b'})
+	wantShort := Subscribe{QoS: 1, TopicIDType: TopicIDShort, MsgID: 4, TopicName: "ab"}
+	if err != nil || !reflect.DeepEqual(m, wantShort) {
+		t.Fatalf("SUBSCRIBE short got %+v, %v; want %+v", m, err, wantShort)
+	}
+	m, err = Decode([]byte{7, 0x14, 0x02, 0x00, 0x05, 'a', 'b'})
+	wantUnsub := Unsubscribe{TopicIDType: TopicIDShort, MsgID: 5, TopicName: "ab"}
+	if err != nil || !reflect.DeepEqual(m, wantUnsub) {
+		t.Fatalf("UNSUBSCRIBE short got %+v, %v; want %+v", m, err, wantUnsub)
+	}
+	m, err = Decode([]byte{8, 0x0C, 0x02, 0x61, 0x62, 0x00, 0x01, 'x'})
+	wantPub := Publish{TopicIDType: TopicIDShort, TopicID: 0x6162, MsgID: 1, Data: []byte("x")}
+	if err != nil || !reflect.DeepEqual(m, wantPub) {
+		t.Fatalf("PUBLISH short got %+v, %v; want %+v", m, err, wantPub)
 	}
 }
 
@@ -351,6 +370,9 @@ func FuzzDecode(f *testing.F) {
 	f.Add([]byte{6, 0x12, 0x20, 0x00, 0x01, 'a'})
 	f.Add([]byte{8, 0x13, 0x00, 0x00, 0x01, 0x00, 0x02, 0x80})
 	f.Add([]byte{5, 0x14, 0x00, 0x00, 0x01, 'a'})
+	f.Add([]byte{7, 0x12, 0x22, 0x00, 0x01, 'a', 'b'})
+	f.Add([]byte{7, 0x14, 0x02, 0x00, 0x01, 'a', 'b'})
+	f.Add([]byte{8, 0x0C, 0x02, 0x00, 0x00, 0x00, 0x01, 'x'})
 	f.Add([]byte{4, 0x15, 0x00, 0x01})
 	f.Fuzz(func(t *testing.T, data []byte) {
 		_, _ = Decode(data)

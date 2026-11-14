@@ -197,7 +197,6 @@ func TestSubscribeUnsupportedRefusedWithoutBrokerContact(t *testing.T) {
 	cases := map[string]mqttsn.Subscribe{
 		"qos 2":      {QoS: 2, TopicIDType: mqttsn.TopicIDNormal, MsgID: 1, TopicName: "a"},
 		"predefined": {TopicIDType: mqttsn.TopicIDPredefined, MsgID: 2, TopicName: "ab"},
-		"short":      {TopicIDType: mqttsn.TopicIDShort, MsgID: 3, TopicName: "ab"},
 	}
 	for name, m := range cases {
 		r := startSubRig(t)
@@ -252,7 +251,7 @@ func TestUnsubscribeForwardsAndKeepsTopicEntry(t *testing.T) {
 
 func TestUnsubscribeUnsupportedAcknowledgedWithoutBrokerContact(t *testing.T) {
 	r := startSubRig(t)
-	sendSN(t, r.client, r.gwAddr, mqttsn.Unsubscribe{TopicIDType: mqttsn.TopicIDShort, MsgID: 3, TopicName: "ab"})
+	sendSN(t, r.client, r.gwAddr, mqttsn.Unsubscribe{TopicIDType: mqttsn.TopicIDPredefined, MsgID: 3, TopicName: "ab"})
 	if un := readAs[mqttsn.Unsuback](t, r.client); un.MsgID != 3 {
 		t.Fatalf("UNSUBACK: %+v", un)
 	}
@@ -279,4 +278,219 @@ func TestUnknownSubackAndUnsubackAreIgnored(t *testing.T) {
 	// The session still answers the client.
 	sendSN(t, r.client, r.gwAddr, mqttsn.Pingreq{})
 	readAs[mqttsn.Pingresp](t, r.client)
+}
+
+// shortPublish is a client PUBLISH on a short topic id: the two name bytes as a 16-bit value.
+func shortPublish(qos byte, id uint16, msgID uint16, data string) mqttsn.Publish {
+	return mqttsn.Publish{QoS: qos, TopicIDType: mqttsn.TopicIDShort, TopicID: id, MsgID: msgID, Data: []byte(data)}
+}
+
+func TestShortPublishReachesBrokerOnTwoCharName(t *testing.T) {
+	r := startSubRig(t)
+	const id = 0x6162 // "ab"
+	sendSN(t, r.client, r.gwAddr, shortPublish(0, id, 0, "x"))
+	if p := r.nextBroker(); p.Type != 3 || string(p.Body) != string(append(topicBody("ab"), 'x')) {
+		t.Fatalf("QoS 0 short PUBLISH: type %d body % x", p.Type, p.Body)
+	}
+
+	sendSN(t, r.client, r.gwAddr, shortPublish(1, id, 7, "y"))
+	p := r.nextBroker()
+	want := append(append(topicBody("ab"), 0, 7), 'y')
+	if p.Type != 3 || p.Flags != 0x02 || string(p.Body) != string(want) {
+		t.Fatalf("QoS 1 short PUBLISH: type %d flags %#x body % x", p.Type, p.Flags, p.Body)
+	}
+	r.brokerSend(brokerPuback(7))
+	ack := readAs[mqttsn.Puback](t, r.client)
+	if ack.TopicID != id || ack.MsgID != 7 || ack.ReturnCode != mqttsn.ReturnAccepted {
+		t.Fatalf("PUBACK: %+v, want topic id %#x, msg id 7", ack, id)
+	}
+}
+
+func TestShortPublishWithZeroByteDroppedWithoutBrokerContact(t *testing.T) {
+	r := startSubRig(t)
+	for _, id := range []uint16{0x0061, 0x6100, 0x0000} {
+		sendSN(t, r.client, r.gwAddr, shortPublish(0, id, 0, "x"))
+		sendSN(t, r.client, r.gwAddr, shortPublish(1, id, 3, "x"))
+	}
+	r.expectNoBrokerPacket()
+	sendSN(t, r.client, r.gwAddr, mqttsn.Pingreq{})
+	readAs[mqttsn.Pingresp](t, r.client)
+}
+
+func TestShortSubscribeReportsTwoBytesWithoutTableSlot(t *testing.T) {
+	r := startSubRig(t)
+	r.fillTopics(maxTopicsPerClient)
+	sendSN(t, r.client, r.gwAddr, mqttsn.Subscribe{QoS: 1, TopicIDType: mqttsn.TopicIDShort, MsgID: 0x0900, TopicName: "ab"})
+	p := r.nextBroker()
+	want := append(append([]byte{0x09, 0x00}, topicBody("ab")...), 1)
+	if p.Type != 8 || string(p.Body) != string(want) {
+		t.Fatalf("SUBSCRIBE: type %d body % x, want % x", p.Type, p.Body, want)
+	}
+	r.brokerSend(brokerSuback(0x0900, 1))
+	ack := readAs[mqttsn.Suback](t, r.client)
+	if ack.ReturnCode != mqttsn.ReturnAccepted || ack.QoS != 1 || ack.MsgID != 0x0900 || ack.TopicID != 0x6162 {
+		t.Fatalf("SUBACK: %+v, want topic id 0x6162", ack)
+	}
+	// The table is still full, so a normal SUBSCRIBE is refused.
+	sendSN(t, r.client, r.gwAddr, mqttsn.Subscribe{MsgID: 0x0901, TopicName: "gw/short/extra"})
+	if ack := readAs[mqttsn.Suback](t, r.client); ack.ReturnCode != mqttsn.ReturnCongestion {
+		t.Fatalf("normal SUBSCRIBE at full table: %+v", ack)
+	}
+}
+
+func TestShortSubscribeWrongLengthCongestionWithoutBrokerContact(t *testing.T) {
+	r := startSubRig(t)
+	for i, name := range []string{"a", "abc", "a\x00"} {
+		id := uint16(0x0A00 + i)
+		sendSN(t, r.client, r.gwAddr, mqttsn.Subscribe{TopicIDType: mqttsn.TopicIDShort, MsgID: id, TopicName: name})
+		if ack := readAs[mqttsn.Suback](t, r.client); ack.ReturnCode != mqttsn.ReturnCongestion || ack.MsgID != id {
+			t.Fatalf("short %q: SUBACK %+v, want Congestion", name, ack)
+		}
+	}
+	r.expectNoBrokerPacket()
+}
+
+func TestShortSubscribeBrokerRefusalNotTracked(t *testing.T) {
+	r := startSubRig(t)
+	sendSN(t, r.client, r.gwAddr, mqttsn.Subscribe{TopicIDType: mqttsn.TopicIDShort, MsgID: 0x0B01, TopicName: "ab"})
+	r.nextBroker()
+	r.brokerSend(brokerSuback(0x0B01, 0x80))
+	if ack := readAs[mqttsn.Suback](t, r.client); ack.ReturnCode != mqttsn.ReturnInvalidTopicID {
+		t.Fatalf("SUBACK: %+v", ack)
+	}
+	r.brokerSend(brokerPublish(0x00, "ab", 0, []byte("x")))
+	readAs[mqttsn.Register](t, r.client) // not delivered as a short PUBLISH
+}
+
+func TestShortUnsubscribeStopsShortDownlink(t *testing.T) {
+	r := startSubRig(t)
+	r.subscribeShort(1, "ab")
+	r.brokerSend(brokerPublish(0x00, "ab", 0, []byte("one")))
+	readAs[mqttsn.Publish](t, r.client)
+
+	sendSN(t, r.client, r.gwAddr, mqttsn.Unsubscribe{TopicIDType: mqttsn.TopicIDShort, MsgID: 9, TopicName: "ab"})
+	p := r.nextBroker()
+	if p.Type != 10 || string(p.Body) != string(append([]byte{0, 9}, topicBody("ab")...)) {
+		t.Fatalf("UNSUBSCRIBE: type %d body % x", p.Type, p.Body)
+	}
+	r.brokerSend([]byte{0xB0, 0x02, 0, 9})
+	if un := readAs[mqttsn.Unsuback](t, r.client); un.MsgID != 9 {
+		t.Fatalf("UNSUBACK: %+v", un)
+	}
+
+	// The name is no longer short-subscribed, so the next publish takes the normal REGISTER path.
+	r.brokerSend(brokerPublish(0x00, "ab", 0, []byte("two")))
+	readAs[mqttsn.Register](t, r.client)
+}
+
+func TestShortUnsubscribeInvalidLengthAcknowledgedWithoutBrokerContact(t *testing.T) {
+	r := startSubRig(t)
+	sendSN(t, r.client, r.gwAddr, mqttsn.Unsubscribe{TopicIDType: mqttsn.TopicIDShort, MsgID: 4, TopicName: "abc"})
+	if un := readAs[mqttsn.Unsuback](t, r.client); un.MsgID != 4 {
+		t.Fatalf("UNSUBACK: %+v", un)
+	}
+	r.expectNoBrokerPacket()
+}
+
+// shortNameAt returns a distinct two-character short name for i in 0..255.
+func shortNameAt(i int) string {
+	return string([]byte{'A' + byte(i/16), 'a' + byte(i%16)})
+}
+
+func TestShortSubscribeCapCongestionWithoutBrokerContact(t *testing.T) {
+	r := startSubRig(t)
+	for i := 0; i < maxShortSubscriptions; i++ {
+		r.subscribeShort(uint16(i+1), shortNameAt(i))
+	}
+	const extra = 0x0F00
+	sendSN(t, r.client, r.gwAddr, mqttsn.Subscribe{QoS: 1, TopicIDType: mqttsn.TopicIDShort, MsgID: extra, TopicName: shortNameAt(maxShortSubscriptions)})
+	if ack := readAs[mqttsn.Suback](t, r.client); ack.ReturnCode != mqttsn.ReturnCongestion || ack.MsgID != extra {
+		t.Fatalf("SUBACK for name %d: %+v, want Congestion", maxShortSubscriptions+1, ack)
+	}
+	r.expectNoBrokerPacket()
+
+	// Re-subscribing a tracked name is allowed at the cap and reaches the broker again.
+	if id := r.subscribeShort(0x0F01, shortNameAt(0)); id != shortTestID(shortNameAt(0)) {
+		t.Fatalf("re-subscribe topic id %#x", id)
+	}
+}
+
+// shortTestID is the short topic id of a valid two-character test name.
+func shortTestID(name string) uint16 {
+	id, _ := shortID(name)
+	return id
+}
+
+func TestTrackedShortNamesCountsTrackedAndPending(t *testing.T) {
+	s := &session{
+		shortSubs: map[string]struct{}{"ab": {}},
+		pendingSubs: map[uint16]pendingSub{
+			1: {short: "cd"},
+			2: {short: "ab"}, // same name twice counts once
+			3: {topicID: 5},  // normal request does not count
+		},
+	}
+	names := s.trackedShortNames()
+	if _, ok := names["ab"]; !ok || len(names) != 2 {
+		t.Fatalf("tracked names %v, want ab and cd", names)
+	}
+}
+
+func TestRegisterWildcardRefusedAndNotTabled(t *testing.T) {
+	r := startSubRig(t)
+	for i, name := range []string{"a/+", "a#", "+"} {
+		id := uint16(0x0E00 + i)
+		sendSN(t, r.client, r.gwAddr, mqttsn.Register{MsgID: id, TopicName: name})
+		ack := readAs[mqttsn.Regack](t, r.client)
+		if ack.ReturnCode != mqttsn.ReturnInvalidTopicID || ack.MsgID != id || ack.TopicID != 0 {
+			t.Fatalf("REGISTER %q: REGACK %+v, want Invalid topic id", name, ack)
+		}
+	}
+	// Nothing was added, so the first normal name gets the first id.
+	sendSN(t, r.client, r.gwAddr, mqttsn.Register{MsgID: 0x0E10, TopicName: "gw/after"})
+	if ack := readAs[mqttsn.Regack](t, r.client); ack.TopicID != 1 || ack.ReturnCode != mqttsn.ReturnAccepted {
+		t.Fatalf("REGACK after refused names: %+v, want topic id 1", ack)
+	}
+}
+
+func TestIsPublishableName(t *testing.T) {
+	for name, want := range map[string]bool{"": false, "a": true, "a/b": true, "a+": false, "+": false, "a#": false, "#/x": false} {
+		if got := isPublishableName(name); got != want {
+			t.Errorf("isPublishableName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestShortPublishWithWildcardNameDroppedThenValidWorks(t *testing.T) {
+	r := startSubRig(t)
+	for _, name := range []string{"a+", "a#"} {
+		id := shortTestID(name)
+		sendSN(t, r.client, r.gwAddr, shortPublish(0, id, 0, "x"))
+		sendSN(t, r.client, r.gwAddr, shortPublish(1, id, 4, "x"))
+	}
+	r.expectNoBrokerPacket()
+
+	sendSN(t, r.client, r.gwAddr, shortPublish(0, shortTestID("ab"), 0, "ok"))
+	if p := r.nextBroker(); p.Type != 3 || string(p.Body) != string(append(topicBody("ab"), "ok"...)) {
+		t.Fatalf("valid PUBLISH after drops: type %d body % x", p.Type, p.Body)
+	}
+}
+
+func TestPublishWildcardTableNameDroppedWithoutBrokerWrite(t *testing.T) {
+	// REGISTER refuses wildcard names, so only a table entry seeded directly can hold one.
+	s := &session{gw: &Gateway{log: slog.New(slog.NewTextHandler(io.Discard, nil))}}
+	id, ok := s.topics.register("a+")
+	if !ok {
+		t.Fatal("seed rejected")
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	broker := closedBrokerClient(t) // any write would fail with net.ErrClosed
+	for _, m := range []mqttsn.Publish{
+		{TopicIDType: mqttsn.TopicIDNormal, TopicID: id, Data: []byte("x")},
+		{QoS: 1, TopicIDType: mqttsn.TopicIDNormal, TopicID: id, MsgID: 6, Data: []byte("x")},
+	} {
+		if err := s.handlePublish(broker, m, log); err != nil {
+			t.Fatalf("PUBLISH %+v: %v, want dropped without broker write", m, err)
+		}
+	}
 }

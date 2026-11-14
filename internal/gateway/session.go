@@ -28,10 +28,13 @@ type session struct {
 	// pending maps the msg id of each QoS 1 PUBLISH still awaiting the broker's PUBACK to its topic id.
 	// The broker packet id is the client's msg id, so no translation is needed.
 	pending map[uint16]uint16
-	// pendingSubs maps the msg id of each SUBSCRIBE awaiting the broker's SUBACK to the topic id to report.
-	pendingSubs map[uint16]uint16
-	// pendingUnsubs holds the msg id of each UNSUBSCRIBE awaiting the broker's UNSUBACK.
-	pendingUnsubs map[uint16]struct{}
+	// pendingSubs maps the msg id of each SUBSCRIBE awaiting the broker's SUBACK to what it reports. See pendingSub.
+	pendingSubs map[uint16]pendingSub
+	// pendingUnsubs maps the msg id of each UNSUBSCRIBE awaiting the broker's UNSUBACK to its short name, or to
+	// "" for a normal one.
+	pendingUnsubs map[uint16]string
+	// shortSubs holds the two-character short names this session is subscribed to. They do not use the table.
+	shortSubs map[string]struct{}
 	// regMsgID is the last gateway REGISTER msg id issued; see nextRegMsgID.
 	regMsgID uint16
 	// pendingRegs maps the msg id of each gateway REGISTER awaiting REGACK to its held PUBLISHes, and
@@ -104,8 +107,9 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 
 	log := s.gw.log.With("client", s.addr.String(), "client_id", c.ClientID)
 	s.pending = make(map[uint16]uint16)
-	s.pendingSubs = make(map[uint16]uint16)
-	s.pendingUnsubs = make(map[uint16]struct{})
+	s.pendingSubs = make(map[uint16]pendingSub)
+	s.pendingUnsubs = make(map[uint16]string)
+	s.shortSubs = make(map[string]struct{})
 	s.pendingRegs = make(map[uint16]*pendingReg)
 	s.regByTopic = make(map[string]uint16)
 	s.pendingDownlink = make(map[uint16]uint16)
@@ -400,7 +404,14 @@ func (s *session) keepaliveDue(broker *mqtt.Client, interval time.Duration, time
 	return nil
 }
 
+// handleRegister adds a normal topic name to the table. A name the broker cannot take (empty or with a wildcard)
+// is refused with REGACK Invalid topic id and adds nothing.
 func (s *session) handleRegister(m mqttsn.Register, log *slog.Logger) {
+	if !isPublishableName(m.TopicName) {
+		log.Warn("refused REGISTER: invalid topic name")
+		s.gw.sendTo(s.addr, mqttsn.Regack{MsgID: m.MsgID, ReturnCode: mqttsn.ReturnInvalidTopicID})
+		return
+	}
 	id, ok := s.topics.register(m.TopicName)
 	code := byte(mqttsn.ReturnAccepted)
 	if !ok {
@@ -410,16 +421,20 @@ func (s *session) handleRegister(m mqttsn.Register, log *slog.Logger) {
 	s.gw.sendTo(s.addr, mqttsn.Regack{TopicID: id, MsgID: m.MsgID, ReturnCode: code})
 }
 
-// handlePublish forwards QoS 0 and QoS 1 publishes on normal topic ids. Other publishes are not handled yet.
-// The payload is never logged. An error means the broker write failed and the broker connection is lost.
+// handlePublish forwards QoS 0 and QoS 1 publishes on normal or short topic ids. Predefined publishes are not
+// handled yet. The payload is never logged. An error means the broker write failed and the broker connection is lost.
 func (s *session) handlePublish(broker *mqtt.Client, m mqttsn.Publish, log *slog.Logger) error {
-	if m.QoS > 1 || m.TopicIDType != mqttsn.TopicIDNormal {
-		log.Debug("ignored PUBLISH: only QoS 0 and 1 with normal topic id are supported", "qos", m.QoS, "topic_id_type", m.TopicIDType)
+	if m.QoS > 1 || (m.TopicIDType != mqttsn.TopicIDNormal && m.TopicIDType != mqttsn.TopicIDShort) {
+		log.Debug("ignored PUBLISH: only QoS 0 and 1 with normal or short topic id are supported", "qos", m.QoS, "topic_id_type", m.TopicIDType)
 		return nil
 	}
-	name, ok := s.topics.lookup(m.TopicID)
+	name, ok := s.publishTopic(m)
 	if !ok {
 		log.Debug("dropped PUBLISH with unknown topic id", "topic_id", m.TopicID)
+		return nil
+	}
+	if !isPublishableName(name) {
+		log.Debug("dropped PUBLISH with invalid topic name", "topic_id_type", m.TopicIDType)
 		return nil
 	}
 	if m.QoS == 1 {
@@ -430,6 +445,15 @@ func (s *session) handlePublish(broker *mqtt.Client, m mqttsn.Publish, log *slog
 	}
 	s.lastWrite = time.Now()
 	return nil
+}
+
+// publishTopic returns the topic name of an uplink PUBLISH: the table entry for a normal id, or the two bytes of
+// a short id. ok is false for an unknown id or an invalid short name.
+func (s *session) publishTopic(m mqttsn.Publish) (string, bool) {
+	if m.TopicIDType == mqttsn.TopicIDShort {
+		return shortName(m.TopicID)
+	}
+	return s.topics.lookup(m.TopicID)
 }
 
 // publishQoS1 sends the PUBLISH to the broker. The client's PUBACK follows only once the broker acknowledges it.

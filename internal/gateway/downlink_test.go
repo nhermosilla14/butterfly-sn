@@ -43,6 +43,20 @@ func (r *subRig) subscribeExact(msgID uint16, name string, qos byte) uint16 {
 	return ack.TopicID
 }
 
+// subscribeShort subscribes the two-character name through the gateway as a short topic at msgID with QoS 1 and
+// returns the topic id reported.
+func (r *subRig) subscribeShort(msgID uint16, name string) uint16 {
+	r.t.Helper()
+	sendSN(r.t, r.client, r.gwAddr, mqttsn.Subscribe{QoS: 1, TopicIDType: mqttsn.TopicIDShort, MsgID: msgID, TopicName: name})
+	r.nextBroker()
+	r.brokerSend(brokerSuback(msgID, 1))
+	ack := readAs[mqttsn.Suback](r.t, r.client)
+	if ack.ReturnCode != mqttsn.ReturnAccepted || ack.TopicID == 0 {
+		r.t.Fatalf("SUBACK: %+v", ack)
+	}
+	return ack.TopicID
+}
+
 // fillTopics registers n distinct names through the client, failing unless each is accepted.
 func (r *subRig) fillTopics(n int) {
 	r.t.Helper()
@@ -282,5 +296,58 @@ func TestDownlinkRejectedRegistrationForgetsNameAndRegistersAgain(t *testing.T) 
 	m := readAs[mqttsn.Publish](t, r.client)
 	if m.TopicID != second.TopicID || string(m.Data) != "again" {
 		t.Fatalf("PUBLISH after accepted REGACK: %+v", m)
+	}
+}
+
+func TestDownlinkShortSubscriptionSendsShortPublishWithoutRegister(t *testing.T) {
+	r := startSubRig(t)
+	const name = "ab"
+	id := r.subscribeShort(1, name)
+	if id != 0x6162 {
+		t.Fatalf("short topic id %#x, want 0x6162", id)
+	}
+
+	r.brokerSend(brokerPublish(0x31, name, 0, []byte("hi"))) // QoS 0, retain
+	m := readAs[mqttsn.Publish](t, r.client)
+	if m.TopicIDType != mqttsn.TopicIDShort || m.TopicID != id || m.QoS != 0 || !m.Retain || m.DUP || string(m.Data) != "hi" {
+		t.Fatalf("PUBLISH: %+v, want short topic id %#x, QoS 0, retain, payload hi", m, id)
+	}
+
+	r.brokerSend(brokerPublish(0x02, name, 0x0C01, []byte("q1")))
+	m = readAs[mqttsn.Publish](t, r.client)
+	if m.TopicIDType != mqttsn.TopicIDShort || m.TopicID != id || m.QoS != 1 || m.MsgID != 0x0C01 || string(m.Data) != "q1" {
+		t.Fatalf("QoS 1 PUBLISH: %+v", m)
+	}
+	r.expectNoBrokerPacket()
+	sendSN(t, r.client, r.gwAddr, mqttsn.Puback{TopicID: id, MsgID: 0x0C01, ReturnCode: mqttsn.ReturnAccepted})
+	r.expectBrokerPuback(0x0C01)
+}
+
+func TestDownlinkOneCharTopicWithWildcardRegisters(t *testing.T) {
+	r := startSubRig(t)
+	sendSN(t, r.client, r.gwAddr, mqttsn.Subscribe{QoS: 0, MsgID: 0x0D01, TopicName: "#"})
+	r.nextBroker()
+	r.brokerSend(brokerSuback(0x0D01, 0))
+	readAs[mqttsn.Suback](t, r.client)
+
+	r.brokerSend(brokerPublish(0x00, "a", 0, []byte("one")))
+	reg := readAs[mqttsn.Register](t, r.client)
+	if reg.TopicName != "a" {
+		t.Fatalf("REGISTER: %+v", reg)
+	}
+	sendSN(t, r.client, r.gwAddr, mqttsn.Regack{TopicID: reg.TopicID, MsgID: reg.MsgID, ReturnCode: mqttsn.ReturnAccepted})
+	m := readAs[mqttsn.Publish](t, r.client)
+	if m.TopicIDType != mqttsn.TopicIDNormal || m.TopicID != reg.TopicID || string(m.Data) != "one" {
+		t.Fatalf("PUBLISH after REGACK: %+v", m)
+	}
+}
+
+func TestDownlinkTwoCharNormalSubscriptionUsesTableID(t *testing.T) {
+	r := startSubRig(t)
+	id := r.subscribeExact(1, "ab", 0)
+	r.brokerSend(brokerPublish(0x00, "ab", 0, []byte("norm")))
+	m := readAs[mqttsn.Publish](t, r.client)
+	if m.TopicIDType != mqttsn.TopicIDNormal || m.TopicID != id || string(m.Data) != "norm" {
+		t.Fatalf("PUBLISH: %+v, want normal topic id %#x", m, id)
 	}
 }

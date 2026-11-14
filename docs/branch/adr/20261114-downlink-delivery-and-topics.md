@@ -16,6 +16,11 @@ bug and short-topic special cases that read past one-character names.
 ## Decision
 - The per-client topic table is capped at 50 names. Client REGISTER or SUBSCRIBE that would add a 51st name
   answers REGACK/SUBACK Congestion. The cap is a constant, matching the legacy gateway; no configuration key.
+  The separate short-subscription set is capped at 50 names for the same reason.
+- Topic names (as opposed to subscription filters) are never empty and never contain `+` or `#`. A client
+  REGISTER with such a name gets REGACK Invalid topic id and adds nothing; an uplink PUBLISH that resolves to
+  such a name, including a short name with a wildcard byte, is dropped and logged before any broker write, so a
+  client protocol error never looks like a broker failure.
 - SUBSCRIBE and UNSUBSCRIBE msg ids are passed unchanged as MQTT packet ids; SUBACK and UNSUBACK copy the ids
   back.
 - SUBACK topic id:

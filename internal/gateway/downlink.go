@@ -58,6 +58,11 @@ func (s *session) handleDownlink(broker *mqtt.Client, e mqtt.Event, log *slog.Lo
 		log.Warn("dropped downlink PUBLISH: packet id still awaiting client PUBACK", "packet_id", e.PacketID)
 		return nil
 	}
+	if id, ok := shortID(e.Topic); ok {
+		if _, short := s.shortSubs[e.Topic]; short {
+			return s.sendDownlinkTo(broker, mqttsn.TopicIDShort, id, e, log)
+		}
+	}
 	if msgID, held := s.regByTopic[e.Topic]; held {
 		if s.heldCount() >= maxHeldDownlink {
 			log.Warn("downlink hold full, dropping PUBLISH")
@@ -86,12 +91,17 @@ func (s *session) handleDownlink(broker *mqtt.Client, e mqtt.Event, log *slog.Lo
 	return nil
 }
 
-// sendDownlink sends a broker PUBLISH to the client on topicID. QoS 1 uses the broker packet id as msg id and
-// is recorded in pendingDownlink until the client's PUBACK. A QoS 1 message is dropped, and the broker
-// acknowledged, when pendingDownlink is full.
+// sendDownlink sends a broker PUBLISH to the client on the normal topic id topicID.
 func (s *session) sendDownlink(broker *mqtt.Client, topicID uint16, e mqtt.Event, log *slog.Logger) error {
+	return s.sendDownlinkTo(broker, mqttsn.TopicIDNormal, topicID, e, log)
+}
+
+// sendDownlinkTo sends a broker PUBLISH to the client on topicID of type topicIDType. QoS 1 uses the broker packet
+// id as msg id and is recorded in pendingDownlink until the client's PUBACK. A QoS 1 message is dropped, and the
+// broker acknowledged, when pendingDownlink is full.
+func (s *session) sendDownlinkTo(broker *mqtt.Client, topicIDType byte, topicID uint16, e mqtt.Event, log *slog.Logger) error {
 	if e.QoS == 0 {
-		s.gw.sendTo(s.addr, mqttsn.Publish{Retain: e.Retain, TopicID: topicID, Data: e.Payload})
+		s.gw.sendTo(s.addr, mqttsn.Publish{Retain: e.Retain, TopicIDType: topicIDType, TopicID: topicID, Data: e.Payload})
 		return nil
 	}
 	if s.downlinkAwaitingPuback(e.PacketID) {
@@ -102,7 +112,7 @@ func (s *session) sendDownlink(broker *mqtt.Client, topicID uint16, e mqtt.Event
 		log.Warn("too many downlink PUBLISH awaiting client PUBACK, dropping")
 		return s.dropDownlink(broker, e)
 	}
-	s.gw.sendTo(s.addr, mqttsn.Publish{QoS: 1, Retain: e.Retain, DUP: e.DUP, TopicID: topicID, MsgID: e.PacketID, Data: e.Payload})
+	s.gw.sendTo(s.addr, mqttsn.Publish{QoS: 1, Retain: e.Retain, DUP: e.DUP, TopicIDType: topicIDType, TopicID: topicID, MsgID: e.PacketID, Data: e.Payload})
 	s.pendingDownlink[e.PacketID] = topicID
 	return nil
 }
