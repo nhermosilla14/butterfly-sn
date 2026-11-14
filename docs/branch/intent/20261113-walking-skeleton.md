@@ -1,7 +1,7 @@
 # Walking skeleton: connect, publish and disconnect
 
 
-- Status: Accepted
+- Status: In progress
 - Date: 2026-11-13
 - Owner: Nicolás Hermosilla
 - Approved by: Nicolás Hermosilla
