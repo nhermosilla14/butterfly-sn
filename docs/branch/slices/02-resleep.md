@@ -1,5 +1,6 @@
 # Re-sleep with a new duration
 
+- Status: Done
 - Intents: 20261114-conformance-defect-fixes
 - ADRs: 20261114-sleep-state-buffer-flush-and-resleep
 

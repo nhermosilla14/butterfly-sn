@@ -81,7 +81,10 @@ keepalive, broker-loss handling, will handling, sleep with buffered downlink and
   disables the pings and asks the broker for no keepalive check.
 - DISCONNECT with a duration puts the session to sleep: the broker connection stays open, the inactivity timer is
   replaced by a 1.5x sleep timer, and downlink PUBLISH messages are buffered (max 20, QoS 1 acknowledged to the
-  broker at buffering time). A client asleep past its duration is declared lost through the same will-aware
+  broker at buffering time). A DISCONNECT with a duration from an asleep or awake client is a re-sleep: it
+  replaces the duration, keeps the session and buffer, and ends a running flush (messages held for a REGISTER
+  return to the front of the buffer without a second broker PUBACK, and no PINGRESP follows). A DISCONNECT
+  without a duration, or with duration 0, ends the session. A client asleep past its duration is declared lost through the same will-aware
   teardown.
 - PINGREQ wakes a sleeping client: the buffer is flushed in order, unknown topics are registered first, and
   PINGRESP is the last datagram before the client sleeps again. CONNECT from sleep gets CONNACK immediately,

@@ -119,6 +119,30 @@ func (s *session) sleepRegPending() bool {
 	return false
 }
 
+// interruptFlush ends a running flush for a re-sleep. The messages held for pending sleep-origin REGISTERs go back to
+// the front of the buffer in registration order. They were acknowledged to the broker when first buffered, so they
+// are not acknowledged again. Their topic names are forgotten and the retry set is cleared; QoS 1 PUBLISHes awaiting
+// the client's PUBACK are parked as on any sleep entry, and pre-acknowledged ids stay, so a late PUBACK is absorbed.
+// Every registration of a flush is sleep-origin, since broker PUBLISHes are buffered while flushing. The buffer cap
+// still applies: messages beyond it, at the back, are dropped and logged.
+func (s *session) interruptFlush(log *slog.Logger) {
+	var front []mqtt.Event
+	for _, reg := range s.sortedRegs() {
+		front = append(front, reg.held...)
+		if id, ok := s.topics.idOf(reg.topic); ok && id == reg.topicID {
+			s.topics.remove(reg.topic)
+		}
+	}
+	s.pendingRegs = make(map[uint16]*pendingReg)
+	s.regByTopic = make(map[string]uint16)
+	s.clearRetries()
+	s.sleepBuf = append(front, s.sleepBuf...)
+	if n := len(s.sleepBuf) - maxSleepBuffer; n > 0 {
+		log.Warn("sleep buffer full, dropping newest PUBLISHes", "dropped", n)
+		s.sleepBuf = s.sleepBuf[:maxSleepBuffer]
+	}
+}
+
 // popBuffer removes the head of the buffer.
 func (s *session) popBuffer() {
 	s.sleepBuf[0] = mqtt.Event{}

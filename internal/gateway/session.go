@@ -319,11 +319,10 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 				}
 				runFlush()
 			case mqttsn.Disconnect:
-				if m.HasDuration && m.Duration > 0 && !s.sleeping && !s.flushing {
-					// Sleep: the broker stays connected and the client gets its DISCONNECT as the reply.
-					s.sleeping = true
-					s.sleepDuration = m.Duration
-					if err := s.holdToSleep(broker, log); err != nil {
+				if m.HasDuration && m.Duration > 0 {
+					// Sleep, or a new sleep duration: the broker stays connected and the client gets its DISCONNECT
+					// as the reply.
+					if err := s.enterSleep(broker, m.Duration, log); err != nil {
 						s.loseBroker(log, err)
 						return
 					}
