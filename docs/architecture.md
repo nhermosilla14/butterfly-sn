@@ -34,7 +34,11 @@ keepalive, broker-loss handling, will handling, sleep with buffered downlink and
 - `gateway.New` binds the UDP socket; `Run` reads datagrams, decodes them and routes by sender address. A
   datagram that does not decode is logged and ignored.
 - A CONNECT from an unknown address opens a session (limited by `max_clients`). An empty client id is
-  rejected with DISCONNECT without creating a session or contacting the broker. The session goroutine dials
+  rejected with DISCONNECT without creating a session or contacting the broker.
+  A CONNECT from an address with an active session (after its CONNACK) replaces that session: the broker gets
+  MQTT DISCONNECT, so no will is published, the client gets no DISCONNECT, and a new session starts in the same
+  map slot under the gateway mutex, without the max_clients check. A CONNECT that arrived before the CONNACK is
+  ignored, as is one with an empty client id. The session goroutine dials
   the broker with a timeout, sends MQTT CONNECT, and answers CONNACK Accepted, or Congestion if anything
   failed.
 - A CONNECT with the Will flag runs the will handshake before any broker contact: WILLTOPICREQ, WILLTOPIC,

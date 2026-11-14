@@ -1,5 +1,6 @@
 # Reconnect from the same address
 
+- Status: Done
 - Intents: 20261114-conformance-defect-fixes
 - ADRs: 20261114-reconnect-from-same-address
 

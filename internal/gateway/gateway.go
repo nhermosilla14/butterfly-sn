@@ -207,10 +207,27 @@ func (g *Gateway) openSessionLocked(ctx context.Context, key string, addr *net.U
 		g.sendTo(addr, mqttsn.Connack{ReturnCode: mqttsn.ReturnCongestion})
 		return
 	}
+	g.startSessionLocked(ctx, key, addr, c)
+}
+
+// startSessionLocked starts a session for the CONNECT c under key. The caller holds g.mu.
+func (g *Gateway) startSessionLocked(ctx context.Context, key string, addr *net.UDPAddr, c mqttsn.Connect) {
 	s := &session{gw: g, key: key, addr: addr, inbox: make(chan inbound, inboxSize)}
 	g.sessions[key] = s
 	g.wg.Add(1)
 	go s.run(ctx, c)
+}
+
+// replaceSession starts a session for the CONNECT c in place of old, the active session under old's key. The swap
+// happens under g.mu, so no packet sees the slot empty, and max_clients is not checked since the slot is reused.
+// If old is no longer the session of its key, because it is already ending, nothing is started and the client
+// retransmits its CONNECT.
+func (g *Gateway) replaceSession(ctx context.Context, old *session, c mqttsn.Connect) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.sessions[old.key] == old {
+		g.startSessionLocked(ctx, old.key, old.addr, c)
+	}
 }
 
 func (g *Gateway) removeSession(s *session) {
