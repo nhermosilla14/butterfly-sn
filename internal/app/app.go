@@ -4,6 +4,7 @@ package app
 import (
 	"context"
 	"flag"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -11,6 +12,9 @@ import (
 	"github.com/nhermosilla14/butterfly-sn/internal/config"
 	"github.com/nhermosilla14/butterfly-sn/internal/gateway"
 )
+
+// Version is the release version, set at build time with -ldflags "-X .../internal/app.Version=...".
+var Version = "dev"
 
 // Run starts the gateway with the arguments in args, logs to stdout and returns the exit status:
 // 0 after ctx is cancelled and the gateway stopped, 1 on configuration or runtime failure, 2 on bad usage.
@@ -20,8 +24,13 @@ func Run(ctx context.Context, args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("butterfly-sn", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	configPath := fs.String("config", "", "path to the YAML configuration file")
+	showVersion := fs.Bool("version", false, "print the version and exit")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if *showVersion {
+		_, _ = fmt.Fprintf(stdout, "butterfly-sn %s\n", Version)
+		return 0
 	}
 	if *configPath == "" {
 		logger.Error("missing required -config flag")
