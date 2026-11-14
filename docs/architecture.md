@@ -1,8 +1,8 @@
 # Architecture
 
-Current state after slice 01 of the will intent (connect, registered-topic QoS 0 and QoS 1 publish, disconnect,
-bad-input handling, client timeouts, broker keepalive, broker-loss handling and the will handshake). Decisions:
-`docs/adr/` and `docs/branch/adr/`.
+Current state after the will intent (connect, registered-topic QoS 0 and QoS 1 publish, disconnect, bad-input
+handling, client timeouts, broker keepalive, broker-loss handling, will handshake and will publication).
+Decisions: `docs/adr/` and `docs/branch/adr/`.
 
 ```
  MQTT-SN client --UDP--> [ router ] --inbox--> [ session goroutine ] --TCP--> MQTT broker
@@ -61,9 +61,12 @@ bad-input handling, client timeouts, broker keepalive, broker-loss handling and 
   sends a best-effort MQTT-SN DISCONNECT to the client and removes the session, so its slot is free again and
   pending QoS 1 acknowledgements are abandoned. The broker socket is closed without another MQTT DISCONNECT.
 - DISCONNECT sends MQTT DISCONNECT to the broker, replies DISCONNECT, and removes the session.
-- On shutdown (context cancel) every session disconnects from the broker, sends DISCONNECT to its client, and the
-  socket closes. Closing the broker connection unblocks the reader; the session cancels it and waits for it to
-  return before the session ends.
+- A will-bearing session that ends without the client's consent (keepalive timeout or gateway shutdown) closes
+  its broker socket without MQTT DISCONNECT, so the broker publishes the stored will. An explicit client
+  DISCONNECT stays graceful; on broker loss the broker publishes the will itself.
+- On shutdown (context cancel) every session ends its broker connection (MQTT DISCONNECT, or a bare close when
+  it has a will), sends DISCONNECT to its client, and the socket closes. Closing the broker connection unblocks
+  the reader; the session cancels it and waits for it to return before the session ends.
 
 ## Test observer
 The e2e suite uses `butterfly-mqtt-client` directly against Mosquitto for its independent observer. The client's
