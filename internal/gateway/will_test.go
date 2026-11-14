@@ -18,15 +18,23 @@ import (
 )
 
 // willBroker is a fake broker. Each accepted connection is reported, its CONNECT is handed to connects, and its
-// CONNACK is held until allow is called, so tests can check that CONNACK waits for the broker.
+// CONNACK is held until allow is called, so tests can check that CONNACK waits for the broker. After CONNACK
+// every packet is recorded in packets, PINGREQ gets PINGRESP, and closed is closed when the connection ends.
 type willBroker struct {
 	ln          net.Listener
 	accepted    chan struct{}
 	connects    chan mqtt.Packet
+	packets     chan mqtt.Packet
+	closed      chan struct{}
 	release     chan struct{}
 	releaseOnce sync.Once
 	done        chan struct{}
 }
+
+const (
+	pktPingreq    = 12
+	pktDisconnect = 14
+)
 
 func startWillBroker(t *testing.T) *willBroker {
 	t.Helper()
@@ -38,6 +46,8 @@ func startWillBroker(t *testing.T) *willBroker {
 		ln:       ln,
 		accepted: make(chan struct{}, 4),
 		connects: make(chan mqtt.Packet, 4),
+		packets:  make(chan mqtt.Packet, 16),
+		closed:   make(chan struct{}),
 		release:  make(chan struct{}),
 		done:     make(chan struct{}),
 	}
@@ -63,7 +73,41 @@ func (wb *willBroker) serve(t *testing.T) {
 	if _, err := conn.Write([]byte{0x20, 0x02, 0, 0}); err != nil {
 		return
 	}
-	_, _ = io.Copy(io.Discard, conn) // until the gateway closes the connection
+	for {
+		p, err := mqtt.ReadPacket(conn)
+		if err != nil {
+			close(wb.closed)
+			return
+		}
+		if p.Type == pktPingreq {
+			_, _ = conn.Write([]byte{0xD0, 0x00})
+		}
+		wb.packets <- p
+	}
+}
+
+// waitClosed waits for the gateway to end the broker connection and reports whether it sent MQTT DISCONNECT
+// first. Packets are read in arrival order, and the test fails if the connection stays open.
+func (wb *willBroker) waitClosed(t *testing.T) (disconnected bool) {
+	t.Helper()
+	deadline := time.After(testWaitLong)
+	for {
+		select {
+		case p := <-wb.packets:
+			disconnected = disconnected || p.Type == pktDisconnect
+		case <-wb.closed:
+			for { // packets sent before the close are still queued
+				select {
+				case p := <-wb.packets:
+					disconnected = disconnected || p.Type == pktDisconnect
+				default:
+					return disconnected
+				}
+			}
+		case <-deadline:
+			t.Fatal("broker connection was not closed")
+		}
+	}
 }
 
 // allow releases the held CONNACK. Cleanup calls it too, so a failed test never blocks the broker.
@@ -85,11 +129,15 @@ func (wb *willBroker) nextConnect(t *testing.T) mqtt.Packet {
 
 // willRig is a gateway running against a willBroker, with one client socket.
 type willRig struct {
-	t      *testing.T
-	g      *Gateway
-	gwAddr *net.UDPAddr
-	client *net.UDPConn
-	broker *willBroker
+	t        *testing.T
+	g        *Gateway
+	gwAddr   *net.UDPAddr
+	client   *net.UDPConn
+	broker   *willBroker
+	cancel   context.CancelFunc
+	runDone  chan error
+	stopOnce sync.Once
+	runErr   error
 }
 
 func startWillRig(t *testing.T, maxClients int) *willRig {
@@ -101,20 +149,46 @@ func startWillRig(t *testing.T, maxClients int) *willRig {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	runDone := make(chan error, 1)
-	go func() { runDone <- g.Run(ctx) }()
+	r := &willRig{t: t, g: g, cancel: cancel, runDone: make(chan error, 1), broker: wb}
+	go func() { r.runDone <- g.Run(ctx) }()
 	t.Cleanup(func() {
-		cancel()
-		if err := <-runDone; err != nil {
+		if err := r.stop(); err != nil {
 			t.Errorf("gateway Run: %v", err)
 		}
 		wb.allow()
 		_ = wb.ln.Close()
 		<-wb.done
 	})
-	r := &willRig{t: t, g: g, gwAddr: g.Addr().(*net.UDPAddr), broker: wb}
+	r.gwAddr = g.Addr().(*net.UDPAddr)
 	r.client = r.newClient()
 	return r
+}
+
+// stop shuts the gateway down and returns Run's error. Later calls return the same result.
+func (r *willRig) stop() error {
+	r.stopOnce.Do(func() {
+		r.cancel()
+		r.runErr = <-r.runDone
+	})
+	return r.runErr
+}
+
+// openSession connects clientID with the given keepalive, with a will when will is set, and returns once the
+// broker has accepted the session and the client has its CONNACK.
+func (r *willRig) openSession(clientID string, duration uint16, will bool) {
+	r.t.Helper()
+	sendSN(r.t, r.client, r.gwAddr, mqttsn.Connect{CleanSession: true, Will: will, Duration: duration, ClientID: clientID})
+	if will {
+		readAs[mqttsn.WillTopicReq](r.t, r.client)
+		sendSN(r.t, r.client, r.gwAddr, mqttsn.WillTopic{QoS: 1, Retain: true, Topic: "will/" + clientID})
+		readAs[mqttsn.WillMsgReq](r.t, r.client)
+		sendSN(r.t, r.client, r.gwAddr, mqttsn.WillMsg{Payload: []byte("gone")})
+	}
+	r.broker.nextConnect(r.t)
+	r.broker.allow()
+	if ack := readAs[mqttsn.Connack](r.t, r.client); ack.ReturnCode != mqttsn.ReturnAccepted {
+		r.t.Fatalf("CONNACK %+v, want accepted", ack)
+	}
 }
 
 // newClient opens a client socket, closed at cleanup.

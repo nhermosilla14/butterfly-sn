@@ -10,11 +10,18 @@ import (
 // willTimeoutWait covers the gateway's 10 s will handshake timeout plus the time to read the DISCONNECT.
 const willTimeoutWait = 15 * time.Second
 
-// connectWithWill runs the will handshake for CONNECT with Will=1: it expects WILLTOPICREQ, sends the will
-// topic, expects WILLMSGREQ, sends the will message and returns the CONNACK. The topic must not be empty.
+// connectWithWill runs the will handshake for CONNECT with Will=1 and a 60 s keepalive. See connectWithWillDuration.
 func connectWithWill(t *testing.T, c *snClient, clientID string, will mqttsn.WillTopic, payload []byte) mqttsn.Connack {
 	t.Helper()
-	c.send(mqttsn.Connect{CleanSession: true, Will: true, Duration: 60, ClientID: clientID})
+	return connectWithWillDuration(t, c, clientID, 60, will, payload)
+}
+
+// connectWithWillDuration runs the will handshake for CONNECT with Will=1 and the given keepalive: it expects
+// WILLTOPICREQ, sends the will topic, expects WILLMSGREQ, sends the will message and returns the CONNACK. The
+// topic must not be empty.
+func connectWithWillDuration(t *testing.T, c *snClient, clientID string, duration uint16, will mqttsn.WillTopic, payload []byte) mqttsn.Connack {
+	t.Helper()
+	c.send(mqttsn.Connect{CleanSession: true, Will: true, Duration: duration, ClientID: clientID})
 	expect[mqttsn.WillTopicReq](t, c, waitShort)
 	c.send(will)
 	expect[mqttsn.WillMsgReq](t, c, waitShort)

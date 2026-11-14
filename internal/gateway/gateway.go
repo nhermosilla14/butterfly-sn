@@ -50,8 +50,9 @@ func (g *Gateway) Addr() net.Addr {
 	return g.conn.LocalAddr()
 }
 
-// Run routes datagrams until ctx is cancelled. Then every session sends MQTT DISCONNECT to its
-// broker, DISCONNECT to its client and ends, and the UDP socket is closed.
+// Run routes datagrams until ctx is cancelled. Then every session ends its broker connection (MQTT
+// DISCONNECT, or a bare close when it has a will), sends DISCONNECT to its client and ends, and the UDP
+// socket is closed.
 func (g *Gateway) Run(ctx context.Context) error {
 	defer g.conn.Close()
 	ctx, cancel := context.WithCancel(ctx)

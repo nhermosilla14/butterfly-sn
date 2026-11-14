@@ -145,7 +145,7 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 	for {
 		select {
 		case <-ctx.Done():
-			_ = broker.Disconnect()
+			endBrokerConn(broker, s.will.hasWill)
 			s.gw.sendTo(s.addr, mqttsn.Disconnect{})
 			log.Info("client closed by shutdown")
 			return
@@ -277,14 +277,25 @@ func (s *session) loseBroker(log *slog.Logger, err error) {
 }
 
 // clientTimedOut ends the session after the client has been silent for longer than its inactivity limit. The
-// session is removed first, so the slot is free and a retry from the client gets a fresh session. Then MQTT
-// DISCONNECT goes to the broker, and a best-effort DISCONNECT to the client. The caller returns, which closes
-// the broker connection.
+// session is removed first, so the slot is free and a retry from the client gets a fresh session. Then the
+// broker connection is ended (see endBrokerConn), and a best-effort DISCONNECT goes to the client. The caller
+// returns, which closes the broker connection.
 func (s *session) clientTimedOut(broker *mqtt.Client, log *slog.Logger) {
 	log.Warn("client silent beyond its keepalive, disconnecting")
 	s.gw.removeSession(s)
-	_ = broker.Disconnect()
+	endBrokerConn(broker, s.will.hasWill)
 	s.gw.sendTo(s.addr, mqttsn.Disconnect{})
+}
+
+// endBrokerConn ends the broker connection for a session that is going away without the client's consent.
+// With a will, the socket is closed without MQTT DISCONNECT, so the broker publishes the will. Without one,
+// MQTT DISCONNECT is sent first.
+func endBrokerConn(broker *mqtt.Client, hasWill bool) {
+	if hasWill {
+		_ = broker.Close()
+		return
+	}
+	_ = broker.Disconnect()
 }
 
 // readBroker reads broker packets in arrival order and hands them to the session loop. It ends after a
