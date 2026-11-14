@@ -7,6 +7,8 @@ Status: early development (connect, QoS 0 and QoS 1 publish in both directions, 
 and short topic names, sleep with buffered downlink and wake flush, gateway discovery, disconnect, bad-input handling, broker
 keepalive, client timeouts, broker-loss handling and will handling work).
 
+How closely it follows the standard, where it deviates and what it lacks: see [CONFORMANCE.md](CONFORMANCE.md).
+
 ## Prerequisites
 - Go 1.27 or newer
 - Docker (end-to-end tests run a Mosquitto container via testcontainers-go; your user must be able to reach the Docker daemon)
