@@ -15,13 +15,12 @@ so it is useful for manual compatibility checks but not for the automated suite.
 ## Decision
 - E2E tests live under `test/e2e` and start the gateway in-process (the same code path as `main`, with a config
   file written to a temp dir) on a random UDP port.
-- The broker is a real Mosquitto (`eclipse-mosquitto:2`) run in a container that the test harness drives through the
-  container runtime's CLI (`podman` if on `PATH`, otherwise `docker`; `BUTTERFLY_E2E_RUNTIME` forces one). Rootless
-  Podman is daemonless, so no socket or service is needed, and the harness never uses a runtime socket. The container
-  has a uniquely named, labelled instance with a small generated config (anonymous, connection logging on) and a
-  loopback-mapped port that is the broker address; it is always removed after the tests. A test fails with a clear
-  message when no runtime works. Setting `BUTTERFLY_E2E_BROKER=<host:port>` uses an existing broker instead
-  (log-based assertions are then skipped).
+- The broker is a real Mosquitto (`eclipse-mosquitto:2`) started in a container through `testcontainers-go`, using
+  Docker (the only container daemon on the project's machines; the user is in the `docker` group). No Podman socket
+  is used. The container has a small generated config (anonymous, connection logging on) copied into it, and its mapped
+  port is the broker address. Containers are removed after the tests (testcontainers cleanup). A test fails with a
+  clear message when Docker is not reachable. Setting `BUTTERFLY_E2E_BROKER=<host:port>` uses an existing broker
+  instead (log-based assertions are then skipped).
   The reason is that a Mosquitto host subprocess cannot be reliably cleaned up from a snap-confined `go` (AppArmor denies
   the signal) and AppArmor also blocks it from reading a config file outside `/etc/mosquitto`.
 - The MQTT-SN client in tests is a small helper in `test/e2e` built on `internal/mqttsn` that sends raw
@@ -33,12 +32,14 @@ so it is useful for manual compatibility checks but not for the automated suite.
 
 ## Alternatives considered
 - Mosquitto as a host subprocess — rejected, see above (leaks processes under snap Go, depends on a local install).
-- `testcontainers-go` — needs a runtime socket (a Podman service or Docker, which the user cannot access and does not want running as a second daemon) and has a large transitive dependency graph.
+- Driving the runtime through its CLI from the tests — no dependency, but more harness code to maintain.
+- Rootless Podman with its socket service — would run a second container daemon next to Docker; rejected by the owner.
 - In-process fake broker only — deterministic, but does not prove compatibility with a real broker; it may be added later for failure injection.
 - `mqtt-sn-tools` as the only test client — too limited.
 
 ## Consequences
-Tests need `podman` (or `docker`) and the `eclipse-mosquitto` image (pulled on first run), locally and in CI. No new Go
-dependency. The harness owns a little CLI-driving code (start, wait, logs, remove). Test helpers reuse the production
-codecs, so codec bugs are also covered by the unit and fuzz tests plus the real broker on the other side. Later
-intents can add a fake broker for failure scenarios.
+Tests need a reachable Docker daemon and the `eclipse-mosquitto` image (pulled on first run), locally and in CI.
+`testcontainers-go` is a test-only dependency with a large transitive graph (its growth is to be reported when added,
+since the owner dislikes dependency sprawl). Test helpers reuse the production codecs, so codec bugs are also covered
+by the unit and fuzz tests plus the real broker on the other side. Later intents can add a fake broker for failure
+scenarios.
