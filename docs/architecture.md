@@ -1,8 +1,8 @@
 # Architecture
 
-Current state after the discovery intent (connect, QoS 0 and QoS 1 publish in both directions, subscriptions with
+Current state after the delivery intent (connect, QoS 0 and QoS 1 publish in both directions, subscriptions with
 wildcards and short names, gateway topic registration, disconnect, bad-input handling, client timeouts, broker
-keepalive, broker-loss handling, will handling, sleep with buffered downlink and wake flush, and gateway discovery). Decisions:
+keepalive, broker-loss handling, will handling, sleep with buffered downlink and wake flush, gateway discovery, and release builds with a container image). Decisions:
 `docs/adr/` and `docs/branch/adr/`.
 
 ```
@@ -20,11 +20,14 @@ keepalive, broker-loss handling, will handling, sleep with buffered downlink and
 | Package | Role |
 |---|---|
 | `cmd/butterfly-sn` | `main`: signals (SIGINT, SIGTERM), calls `internal/app` |
-| `internal/app` | Startup path shared by `main` and the e2e tests: flags, config, logging, run |
+| `internal/app` | Startup path shared by `main` and the e2e tests: flags (`-config`, `-version`), config, logging, run; `Version` is set by the linker |
 | `internal/config` | YAML loading, defaults, validation (unknown keys rejected) |
 | `internal/mqttsn` | MQTT-SN packet codec, no I/O (CONNECT, CONNACK, REGISTER, REGACK, PUBLISH, PUBACK, SUBSCRIBE, SUBACK, UNSUBSCRIBE, UNSUBACK, PINGREQ, PINGRESP, DISCONNECT, will messages, SEARCHGW, GWINFO, ADVERTISE) |
 | `internal/gateway` | UDP listener and router; one session goroutine, one broker reader goroutine and a normal-topic table per client |
 | `butterfly-mqtt-client/` | Standalone MQTT 3.1.1 client module (own `go.mod`, stdlib only, no gateway concepts), joined by a `replace` directive so it can move to its own repo |
+| `Makefile`, `Containerfile` | Build and release: `make dist` cross-builds static binaries, archives and checksums; `make image` assembles the scratch image from them with podman |
+| `.github/workflows` | CI and release workflows; they call only Makefile targets |
+| `test/image`, `test/workflows` | Image smoke test (tag `image`) and the check that workflows match the Makefile |
 | `test/e2e` | End-to-end tests: gateway in-process, real Mosquitto in a container (testcontainers-go, Docker), plain MQTT observer |
 
 ## Flow
@@ -94,6 +97,6 @@ keepalive, broker-loss handling, will handling, sleep with buffered downlink and
   the reader; the session cancels it and waits for it to return before the session ends.
 
 ## Test observer
-The e2e suite uses `butterfly-mqtt-client` directly against Mosquitto for its independent observer. The client's
-QoS 0 SUBSCRIBE and incoming PUBLISH operations exist for this purpose; the gateway does not yet handle client
-subscriptions or broker-to-client delivery.
+The e2e suite uses `butterfly-mqtt-client` directly against Mosquitto for its independent observer and publisher.
+The client's blocking QoS 0 `Subscribe` and `ReadPublish` observer operations exist for this purpose and are
+separate from the event-driven operations the gateway uses (`SubscribeRequest`, `ReadEvent`, `Puback`).
