@@ -1,8 +1,9 @@
 # Conformance defect fixes: re-sleep, repeated CONNECT, oversize downlink
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-14
 - Owner: Nicolás Hermosilla
+- Approved by: Nicolás Hermosilla
 - Depends on: none
 
 ## Goal
@@ -59,7 +60,6 @@ once, and one oversize broker message can no longer get a healthy client disconn
 - Applying a different keep-alive or will on a CONNECT from a sleeping client.
 - Limits for uplink message size.
 
-## Open questions
-- Should a repeated CONNECT end the old session with a plain MQTT DISCONNECT (no will, proposed) or by a bare close,
-  so the broker publishes the will?
-- During a flush, should DISCONNECT-with-duration keep the unsent messages buffered (proposed), or discard them?
+## Decisions taken
+- A repeated CONNECT ends the old session with a plain MQTT DISCONNECT, so no will is published.
+- A DISCONNECT with a duration during a flush keeps the unsent messages buffered.
