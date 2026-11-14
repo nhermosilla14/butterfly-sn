@@ -86,11 +86,20 @@ func startSubRig(t *testing.T) *subRig {
 // startSubRigDuration is startSubRig with the client's CONNECT duration.
 func startSubRigDuration(t *testing.T, duration uint16) *subRig {
 	t.Helper()
+	return startSubRigTuned(t, duration, nil)
+}
+
+// startSubRigTuned is startSubRigDuration with tune applied to the gateway before Run starts.
+func startSubRigTuned(t *testing.T, duration uint16, tune func(*Gateway)) *subRig {
+	t.Helper()
 	sb := startSubBroker(t)
-	cfg := config.Config{Listen: "127.0.0.1:0", Broker: sb.ln.Addr().String(), MaxClients: 10}
+	cfg := config.Config{Listen: "127.0.0.1:0", Broker: sb.ln.Addr().String(), MaxClients: 10, RetryInterval: 10, RetryLimit: 5}
 	g, err := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if tune != nil {
+		tune(g)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	runDone := make(chan error, 1)

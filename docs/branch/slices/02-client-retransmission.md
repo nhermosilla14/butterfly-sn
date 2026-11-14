@@ -3,6 +3,7 @@
 - Intents: 20261114-broker-outage-inflight-cleanup
 - ADRs: 20261114-gateway-retry-and-pending-timeouts
 - Depends on: 01
+- Status: Done
 
 ## Scope
 Gateway REGISTER and downlink QoS 1 PUBLISH are supervised. They are retransmitted every retry interval (PUBLISH

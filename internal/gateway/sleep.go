@@ -51,6 +51,7 @@ func (s *session) holdToSleep(broker *mqtt.Client, log *slog.Logger) error {
 	}
 	s.pendingRegs = make(map[uint16]*pendingReg)
 	s.regByTopic = make(map[string]uint16)
+	s.clearRetries()
 	return nil
 }
 

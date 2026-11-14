@@ -92,6 +92,12 @@ keepalive, broker-loss handling, will handling, sleep with buffered downlink and
 - A will-bearing session that ends without the client's consent (keepalive timeout or gateway shutdown) closes
   its broker socket without MQTT DISCONNECT, so the broker publishes the stored will. An explicit client
   DISCONNECT stays graceful; on broker loss the broker publishes the will itself.
+- Every REGISTER and QoS 1 PUBLISH the gateway sends to the client (including wake-up flush and short-topic ones)
+  is recorded in a per-session retry set with its exact datagram, attempt count and due time, keyed by message
+  type and msg id. The session goroutine's single retry timer is armed for the earliest due entry (nil when the
+  set is empty). When it fires, each due entry is sent again unchanged (PUBLISH with DUP) and due moves one
+  `retry_interval` on; an entry that already used `retry_limit` retransmissions ends the session through the
+  client-loss teardown, without a broker PUBACK. REGACK and client PUBACK remove entries, and sleep clears the set.
 - On shutdown (context cancel) every session ends its broker connection (MQTT DISCONNECT, or a bare close when
   it has a will), sends DISCONNECT to its client, and the socket closes. Closing the broker connection unblocks
   the reader; the session cancels it and waits for it to return before the session ends.

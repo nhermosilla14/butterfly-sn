@@ -29,6 +29,8 @@ type willBroker struct {
 	release     chan struct{}
 	releaseOnce sync.Once
 	done        chan struct{}
+	// conn is the accepted connection. It is set before the CONNECT is reported on connects.
+	conn net.Conn
 }
 
 const (
@@ -68,6 +70,7 @@ func (wb *willBroker) serve(t *testing.T) {
 		t.Errorf("will broker: CONNECT: %v", err)
 		return
 	}
+	wb.conn = conn
 	wb.connects <- connect
 	<-wb.release
 	if _, err := conn.Write([]byte{0x20, 0x02, 0, 0}); err != nil {
@@ -142,11 +145,20 @@ type willRig struct {
 
 func startWillRig(t *testing.T, maxClients int) *willRig {
 	t.Helper()
+	return startWillRigTuned(t, maxClients, nil)
+}
+
+// startWillRigTuned is startWillRig with tune applied to the gateway before Run starts.
+func startWillRigTuned(t *testing.T, maxClients int, tune func(*Gateway)) *willRig {
+	t.Helper()
 	wb := startWillBroker(t)
-	cfg := config.Config{Listen: "127.0.0.1:0", Broker: wb.ln.Addr().String(), MaxClients: maxClients}
+	cfg := config.Config{Listen: "127.0.0.1:0", Broker: wb.ln.Addr().String(), MaxClients: maxClients, RetryInterval: 10, RetryLimit: 5}
 	g, err := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if tune != nil {
+		tune(g)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &willRig{t: t, g: g, cancel: cancel, runDone: make(chan error, 1), broker: wb}

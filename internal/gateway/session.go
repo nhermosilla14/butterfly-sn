@@ -69,6 +69,10 @@ type session struct {
 	// preAcked holds the gateway msg ids of the QoS 1 PUBLISHes sent on wake. The broker was acknowledged when
 	// each one was buffered, so the client's PUBACK for these must not produce a second broker PUBACK.
 	preAcked map[uint16]struct{}
+	// retries holds the gateway REGISTERs and QoS 1 PUBLISHes to the client awaiting their replies, and
+	// retryTimer fires at the earliest due one. See retry.go.
+	retries    map[retryKey]*retryEntry
+	retryTimer *time.Timer
 }
 
 // willState is the will a client sent in the handshake. hasWill is set only once the will message arrived;
@@ -132,6 +136,8 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 	s.regByTopic = make(map[string]uint16)
 	s.pendingDownlink = make(map[uint16]uint16)
 	s.preAcked = make(map[uint16]struct{})
+	s.retries = make(map[retryKey]*retryEntry)
+	defer s.stopRetryTimer()
 	if c.Will && !s.awaitWill(ctx, log) {
 		return
 	}
@@ -207,12 +213,14 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 		s.flushing = false
 		if s.flushPing {
 			s.gw.sendTo(s.addr, mqttsn.Pingresp{})
+			s.clearRetries()
 			armSleep()
 			log.Info("client asleep again")
 		}
 	}
 
 	for {
+		retryDue := s.armRetry()
 		select {
 		case <-ctx.Done():
 			endBrokerConn(broker, s.will.hasWill)
@@ -257,6 +265,11 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 			log.Warn("client asleep beyond its sleep duration, disconnecting")
 			s.clientTimedOut(broker)
 			return
+		case <-retryDue:
+			if s.retransmitDue(log) {
+				s.clientTimedOut(broker)
+				return
+			}
 		case in := <-s.inbox:
 			lastClient = in.at
 			if s.sleeping && s.ignoredWhileAsleep(in.msg, log) {
