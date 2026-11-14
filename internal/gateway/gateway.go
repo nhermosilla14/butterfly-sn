@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -26,6 +27,9 @@ const (
 
 // discoveryDelay picks the wait before a GWINFO reply. Tests replace it to avoid sleeping.
 var discoveryDelay = func() time.Duration { return rand.N(maxDiscoveryDelay) }
+
+// advertiseTick converts the configured interval to the ticker period. Tests replace it for sub-second ticks.
+var advertiseTick = func(seconds int) time.Duration { return time.Duration(seconds) * time.Second }
 
 // Gateway is a UDP listener bound by New and served by Run.
 type Gateway struct {
@@ -68,6 +72,10 @@ func (g *Gateway) Run(ctx context.Context) error {
 	stop := context.AfterFunc(ctx, func() { _ = g.conn.SetReadDeadline(time.Unix(1, 0)) })
 	defer stop()
 
+	if err := g.startAdvertise(ctx); err != nil {
+		return err
+	}
+
 	buf := make([]byte, maxDatagram)
 	for {
 		n, addr, err := g.conn.ReadFromUDP(buf)
@@ -79,6 +87,40 @@ func (g *Gateway) Run(ctx context.Context) error {
 		}
 		g.route(ctx, buf[:n], addr)
 	}
+}
+
+// startAdvertise starts the advertisement ticker when advertise_interval is above 0. The destination is
+// resolved once: advertise_address, or the broadcast address on the bound listen port. The first ADVERTISE
+// goes out after one full interval. The goroutine is part of g.wg and ends when ctx does.
+func (g *Gateway) startAdvertise(ctx context.Context) error {
+	secs := g.cfg.AdvertiseInterval
+	if secs <= 0 {
+		return nil
+	}
+	dest := g.cfg.AdvertiseAddress
+	if dest == "" {
+		dest = net.JoinHostPort("255.255.255.255", strconv.Itoa(g.conn.LocalAddr().(*net.UDPAddr).Port))
+	}
+	addr, err := net.ResolveUDPAddr("udp4", dest)
+	if err != nil {
+		return fmt.Errorf("gateway: advertise_address: %w", err)
+	}
+	msg := mqttsn.Advertise{GwID: byte(g.cfg.GatewayID), Duration: uint16(secs)}
+	ticker := time.NewTicker(advertiseTick(secs))
+	g.wg.Add(1)
+	go func() {
+		defer g.wg.Done()
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				g.sendTo(addr, msg)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return nil
 }
 
 // route handles one datagram. A valid packet of a type not implemented yet has msg nil and err ErrUnsupported.

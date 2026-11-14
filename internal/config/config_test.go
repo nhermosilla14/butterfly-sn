@@ -12,7 +12,8 @@ func TestParseDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.MaxClients != 100 || cfg.LogLevel != "info" || cfg.SlogLevel() != slog.LevelInfo || cfg.GatewayID != 1 {
+	if cfg.MaxClients != 100 || cfg.LogLevel != "info" || cfg.SlogLevel() != slog.LevelInfo || cfg.GatewayID != 1 ||
+		cfg.AdvertiseInterval != 900 || cfg.AdvertiseAddress != "" {
 		t.Fatalf("defaults: %+v", cfg)
 	}
 }
@@ -24,23 +25,31 @@ func TestParseEmptyDocumentFailsOnRequiredKeys(t *testing.T) {
 	}
 }
 
+const base = "listen: 127.0.0.1:0\nbroker: 127.0.0.1:1883\n"
+
 func TestParseErrors(t *testing.T) {
 	cases := map[string]struct {
 		yaml string
 		key  string
 	}{
-		"unknown key":      {"listen: 127.0.0.1:0\nbroker: 127.0.0.1:1883\nlisen: x\n", "lisen"},
-		"missing broker":   {"listen: 127.0.0.1:0\n", "broker"},
-		"broker no port":   {"listen: 127.0.0.1:0\nbroker: localhost\n", "broker"},
-		"broker port zero": {"listen: 127.0.0.1:0\nbroker: 127.0.0.1:0\n", "broker"},
-		"listen bad":       {"listen: nope\nbroker: 127.0.0.1:1883\n", "listen"},
-		"max zero":         {"listen: 127.0.0.1:0\nbroker: 127.0.0.1:1883\nmax_clients: 0\n", "max_clients"},
-		"max negative":     {"listen: 127.0.0.1:0\nbroker: 127.0.0.1:1883\nmax_clients: -1\n", "max_clients"},
-		"bad level":        {"listen: 127.0.0.1:0\nbroker: 127.0.0.1:1883\nlog_level: trace\n", "log_level"},
-		"syntax":           {"listen: [\n", "config"},
-		"gateway id zero":  {"listen: 127.0.0.1:0\nbroker: 127.0.0.1:1883\ngateway_id: 0\n", "gateway_id"},
-		"gateway id neg":   {"listen: 127.0.0.1:0\nbroker: 127.0.0.1:1883\ngateway_id: -1\n", "gateway_id"},
-		"gateway id 256":   {"listen: 127.0.0.1:0\nbroker: 127.0.0.1:1883\ngateway_id: 256\n", "gateway_id"},
+		"unknown key":              {"listen: 127.0.0.1:0\nbroker: 127.0.0.1:1883\nlisen: x\n", "lisen"},
+		"missing broker":           {"listen: 127.0.0.1:0\n", "broker"},
+		"broker no port":           {"listen: 127.0.0.1:0\nbroker: localhost\n", "broker"},
+		"broker port zero":         {"listen: 127.0.0.1:0\nbroker: 127.0.0.1:0\n", "broker"},
+		"listen bad":               {"listen: nope\nbroker: 127.0.0.1:1883\n", "listen"},
+		"max zero":                 {"listen: 127.0.0.1:0\nbroker: 127.0.0.1:1883\nmax_clients: 0\n", "max_clients"},
+		"max negative":             {"listen: 127.0.0.1:0\nbroker: 127.0.0.1:1883\nmax_clients: -1\n", "max_clients"},
+		"bad level":                {"listen: 127.0.0.1:0\nbroker: 127.0.0.1:1883\nlog_level: trace\n", "log_level"},
+		"syntax":                   {"listen: [\n", "config"},
+		"gateway id zero":          {"listen: 127.0.0.1:0\nbroker: 127.0.0.1:1883\ngateway_id: 0\n", "gateway_id"},
+		"gateway id neg":           {"listen: 127.0.0.1:0\nbroker: 127.0.0.1:1883\ngateway_id: -1\n", "gateway_id"},
+		"gateway id 256":           {"listen: 127.0.0.1:0\nbroker: 127.0.0.1:1883\ngateway_id: 256\n", "gateway_id"},
+		"advertise interval neg":   {base + "advertise_interval: -1\n", "advertise_interval"},
+		"advertise interval 65536": {base + "advertise_interval: 65536\n", "advertise_interval"},
+		"advertise addr no port":   {base + "advertise_address: 10.0.0.1\n", "advertise_address"},
+		"advertise addr port zero": {base + "advertise_address: 10.0.0.1:0\n", "advertise_address"},
+		"advertise addr no host":   {base + "advertise_address: \":5684\"\n", "advertise_address"},
+		"advertise addr garbage":   {base + "advertise_address: \"!!\"\n", "advertise_address"},
 	}
 	for name, tc := range cases {
 		_, err := Parse(strings.NewReader(tc.yaml))
@@ -65,5 +74,17 @@ func TestParseGatewayIDBounds(t *testing.T) {
 func TestParseListenPortZeroAllowed(t *testing.T) {
 	if _, err := Parse(strings.NewReader("listen: 127.0.0.1:0\nbroker: 127.0.0.1:1883\n")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestParseAdvertise(t *testing.T) {
+	for _, iv := range []int{0, 65535} {
+		cfg, err := Parse(strings.NewReader(base + "advertise_interval: " + strconv.Itoa(iv) + "\nadvertise_address: 10.0.0.1:1234\n"))
+		if err != nil {
+			t.Fatalf("interval %d: %v", iv, err)
+		}
+		if cfg.AdvertiseInterval != iv || cfg.AdvertiseAddress != "10.0.0.1:1234" {
+			t.Fatalf("interval %d parsed as %+v", iv, cfg)
+		}
 	}
 }

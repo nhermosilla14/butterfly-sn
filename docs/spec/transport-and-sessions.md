@@ -71,7 +71,8 @@ connected id gets its own session and broker connection. An empty client id make
 ### Unknown or disconnected senders
 A valid non-CONNECT packet from an address with no live session is answered with DISCONNECT, whether the sender
 never connected or its session already ended. DISCONNECT from an unknown sender is ignored to avoid an answer
-loop.
+loop. Discovery packets (SEARCHGW, GWINFO, ADVERTISE) are handled before this rule and never get DISCONNECT
+(see [discovery.md](discovery.md)).
 - Criteria:
   - A REGISTER from a fresh address gets DISCONNECT.
   - A client that completed DISCONNECT and sends another non-CONNECT gets DISCONNECT.
@@ -87,7 +88,6 @@ Malformed input never crashes the gateway and never gets a reply.
 - Tests: TestMalformedDatagramsIgnored, TestDecodeErrors, FuzzDecode
 
 ## Not supported
-- Discovery (SEARCHGW, GWINFO, ADVERTISE); planned.
 - Will updates (WILLTOPICUPD, WILLMSGUPD) and will persistence across sessions; planned in later intents.
 - Gateway-originated PINGREQ towards clients: supervision is passive, based on packets the client sends.
 - Persistent (non-clean) broker sessions: CONNECT is accepted, but the broker session is always clean.

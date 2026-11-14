@@ -1,8 +1,8 @@
 # Architecture
 
-Current state after the sleep intent (connect, QoS 0 and QoS 1 publish in both directions, subscriptions with
+Current state after the discovery intent (connect, QoS 0 and QoS 1 publish in both directions, subscriptions with
 wildcards and short names, gateway topic registration, disconnect, bad-input handling, client timeouts, broker
-keepalive, broker-loss handling, will handling, and sleep with buffered downlink and wake flush). Decisions:
+keepalive, broker-loss handling, will handling, sleep with buffered downlink and wake flush, and gateway discovery). Decisions:
 `docs/adr/` and `docs/branch/adr/`.
 
 ```
@@ -22,7 +22,7 @@ keepalive, broker-loss handling, will handling, and sleep with buffered downlink
 | `cmd/butterfly-sn` | `main`: signals (SIGINT, SIGTERM), calls `internal/app` |
 | `internal/app` | Startup path shared by `main` and the e2e tests: flags, config, logging, run |
 | `internal/config` | YAML loading, defaults, validation (unknown keys rejected) |
-| `internal/mqttsn` | MQTT-SN packet codec, no I/O (CONNECT, CONNACK, REGISTER, REGACK, PUBLISH, PUBACK, SUBSCRIBE, SUBACK, UNSUBSCRIBE, UNSUBACK, PINGREQ, PINGRESP, DISCONNECT, will messages) |
+| `internal/mqttsn` | MQTT-SN packet codec, no I/O (CONNECT, CONNACK, REGISTER, REGACK, PUBLISH, PUBACK, SUBSCRIBE, SUBACK, UNSUBSCRIBE, UNSUBACK, PINGREQ, PINGRESP, DISCONNECT, will messages, SEARCHGW, GWINFO, ADVERTISE) |
 | `internal/gateway` | UDP listener and router; one session goroutine, one broker reader goroutine and a normal-topic table per client |
 | `butterfly-mqtt-client/` | Standalone MQTT 3.1.1 client module (own `go.mod`, stdlib only, no gateway concepts), joined by a `replace` directive so it can move to its own repo |
 | `test/e2e` | End-to-end tests: gateway in-process, real Mosquitto in a container (testcontainers-go, Docker), plain MQTT observer |
@@ -41,7 +41,8 @@ keepalive, broker-loss handling, will handling, and sleep with buffered downlink
 - SEARCHGW from any sender is answered with one unicast GWINFO (configured `gateway_id`) after a random 0-500 ms
   delay; the radius is ignored. GWINFO and ADVERTISE from clients are ignored. Discovery is handled before
   session lookup, never creates a session and never contacts the broker. A pending reply is joined by `Run`
-  before the socket closes, so none outlives shutdown.
+  before the socket closes, so none outlives shutdown. A single advertisement ticker, also joined by `Run`, sends
+  ADVERTISE after each full `advertise_interval` to `advertise_address` (default: broadcast on the listen port).
 - Any other valid packet from an address with no live session gets DISCONNECT; DISCONNECT itself is ignored
   there to avoid an answer loop. This is also the case for a client whose session just ended.
 - REGISTER adds the exact topic name to the session's table and answers REGACK. New ids are allocated from 1 to

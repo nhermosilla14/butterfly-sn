@@ -4,7 +4,7 @@ A transparent MQTT-SN v1.2 gateway written in Go. It lets UDP-based MQTT-SN clie
 broker, replacing a patched Eclipse Paho MQTT-SN gateway. See [docs/vision.md](docs/vision.md).
 
 Status: early development (connect, QoS 0 and QoS 1 publish in both directions, subscriptions with wildcards
-and short topic names, sleep with buffered downlink and wake flush, disconnect, bad-input handling, broker
+and short topic names, sleep with buffered downlink and wake flush, gateway discovery, disconnect, bad-input handling, broker
 keepalive, client timeouts, broker-loss handling and will handling work).
 
 ## Prerequisites
@@ -20,7 +20,7 @@ cp config.example.yaml config.yaml   # edit listen and broker
 ```
 
 ## Usage
-Flag `-config <file>` (required). Configuration keys (`listen`, `broker`, `max_clients`, `log_level`) are documented in `config.example.yaml`. Stop with SIGINT or SIGTERM.
+Flag `-config <file>` (required). Configuration keys (`listen`, `broker`, `max_clients`, `log_level`, `gateway_id`, `advertise_interval`, `advertise_address`) are documented in `config.example.yaml`. Stop with SIGINT or SIGTERM.
 
 ## Manual compatibility check
 The automated suite uses its own MQTT-SN helper. For a manual check with a third-party client, run the gateway
