@@ -2,7 +2,10 @@ package e2e
 
 import (
 	"context"
+	"errors"
+	"os"
 	"testing"
+	"time"
 
 	mqtt "github.com/nhermosilla14/butterfly-mqtt-client"
 )
@@ -42,4 +45,16 @@ func (o *observer) next() mqtt.Message {
 		o.t.Fatalf("waiting for broker delivery: %v", err)
 	}
 	return m
+}
+
+// expectNone fails if the broker delivers a message within the bounded window.
+func (o *observer) expectNone(window time.Duration) {
+	o.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), window)
+	defer cancel()
+	if m, err := o.cl.ReadPublish(ctx); err == nil {
+		o.t.Fatalf("unexpected delivery on %q: %q", m.Topic, m.Payload)
+	} else if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, os.ErrDeadlineExceeded) {
+		o.t.Fatalf("waiting for silence: %v", err)
+	}
 }

@@ -50,6 +50,84 @@ func TestConnectEncodesCONNECT(t *testing.T) {
 	}
 }
 
+// connectPacket runs Connect against a broker that accepts it and returns the CONNECT packet it received.
+func connectPacket(t *testing.T, opts ConnectOptions) Packet {
+	t.Helper()
+	got := make(chan Packet, 1)
+	c := serve(t, func(srv net.Conn) {
+		p, err := ReadPacket(srv)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		got <- p
+		ack, _ := packet(typeConnack, 0, []byte{0, 0})
+		_, _ = srv.Write(ack)
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := c.Connect(ctx, opts); err != nil {
+		t.Fatal(err)
+	}
+	return <-got
+}
+
+func TestConnectEncodesWill(t *testing.T) {
+	p := connectPacket(t, ConnectOptions{ClientID: "abc", CleanSession: true, KeepAlive: 60,
+		WillTopic: "w/t", WillPayload: []byte("bye"), WillQoS: 1, WillRetain: true})
+	// Flags: clean session 0x02, will 0x04, will QoS 1 at bits 3-4 (0x08), will retain 0x20.
+	want := []byte{0, 4, 'M', 'Q', 'T', 'T', 4, 0x02 | 0x04 | 0x08 | 0x20, 0, 60,
+		0, 3, 'a', 'b', 'c', 0, 3, 'w', '/', 't', 0, 3, 'b', 'y', 'e'}
+	if p.Type != typeConnect || !bytes.Equal(p.Body, want) {
+		t.Fatalf("CONNECT with will: type %d body % x, want % x", p.Type, p.Body, want)
+	}
+}
+
+func TestConnectWillFlags(t *testing.T) {
+	cases := []struct {
+		name  string
+		opts  ConnectOptions
+		flags byte
+	}{
+		{"no will", ConnectOptions{ClientID: "x"}, 0x00},
+		{"empty topic no will", ConnectOptions{ClientID: "x", CleanSession: true}, 0x02},
+		{"qos 0", ConnectOptions{ClientID: "x", WillTopic: "t"}, 0x04},
+		{"qos 1", ConnectOptions{ClientID: "x", WillTopic: "t", WillQoS: 1}, 0x04 | 0x08},
+		{"qos 0 retain", ConnectOptions{ClientID: "x", WillTopic: "t", WillRetain: true}, 0x04 | 0x20},
+		{"qos 1 retain", ConnectOptions{ClientID: "x", WillTopic: "t", WillQoS: 1, WillRetain: true}, 0x04 | 0x08 | 0x20},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := connectPacket(t, tc.opts)
+			if p.Body[7] != tc.flags {
+				t.Fatalf("connect flags %#x, want %#x", p.Body[7], tc.flags)
+			}
+		})
+	}
+}
+
+func TestConnectWillInvalid(t *testing.T) {
+	cases := map[string]struct {
+		opts ConnectOptions
+		want error
+	}{
+		"qos 2":                   {ConnectOptions{ClientID: "x", WillTopic: "t", WillQoS: 2}, ErrInvalidWill},
+		"qos 3":                   {ConnectOptions{ClientID: "x", WillTopic: "t", WillQoS: 3}, ErrInvalidWill},
+		"qos without topic":       {ConnectOptions{ClientID: "x", WillQoS: 1}, ErrInvalidWill},
+		"retain without topic":    {ConnectOptions{ClientID: "x", WillRetain: true}, ErrInvalidWill},
+		"payload without topic":   {ConnectOptions{ClientID: "x", WillPayload: []byte("p")}, ErrInvalidWill},
+		"wildcard in will topic":  {ConnectOptions{ClientID: "x", WillTopic: "a/+"}, ErrInvalidTopic},
+		"will payload over 65535": {ConnectOptions{ClientID: "x", WillTopic: "t", WillPayload: make([]byte, 0x10000)}, ErrMalformedPacket},
+	}
+	for name, tc := range cases {
+		// No connection: an invalid CONNECT must fail before anything is written.
+		err := (&Client{}).Connect(context.Background(), tc.opts)
+		if !errors.Is(err, tc.want) {
+			t.Errorf("%s: got %v, want %v", name, err, tc.want)
+		}
+	}
+}
+
 func TestConnectReturnCodeRefused(t *testing.T) {
 	c := serve(t, func(srv net.Conn) {
 		_, _ = ReadPacket(srv)

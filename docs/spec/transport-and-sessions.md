@@ -8,6 +8,7 @@ sessions. Transparent mode only: the gateway does not aggregate clients or termi
 ### Startup and shutdown
 The gateway reads a YAML file at startup, binds the UDP listen address, and logs a startup line with the bound
 address. SIGINT and SIGTERM close every broker connection, send DISCONNECT to connected clients and exit 0.
+Will-bearing connections are closed so the broker publishes their will (see [will.md](will.md)).
 - Criteria:
   - A valid configuration starts the gateway and logs `gateway started` with its UDP address.
   - A missing or invalid configuration, including unknown keys, logs the error and exits non-zero.
@@ -17,7 +18,8 @@ address. SIGINT and SIGTERM close every broker connection, send DISCONNECT to co
 ### Connect and disconnect
 CONNECT opens a dedicated MQTT 3.1.1 connection to the broker using the MQTT-SN client id, and the client gets
 CONNACK Accepted only after the broker accepted it. If the broker is unreachable or refuses, the client gets
-CONNACK Congestion and no session state is kept. DISCONNECT closes the broker connection and is answered with
+CONNACK Congestion and no session state is kept. A CONNECT with the Will flag runs the will handshake before the
+broker is contacted (see [will.md](will.md)). DISCONNECT closes the broker connection and is answered with
 DISCONNECT. The CONNECT duration is the client keepalive; 0 disables supervision.
 - Criteria:
   - CONNECT gets CONNACK Accepted; the broker sees one connection per MQTT-SN client, with that client id.
@@ -37,7 +39,7 @@ disables all of this.
     publish still reaches the broker because the gateway pings the broker itself.
   - Periodic PINGREQ keeps a client alive past the inactivity limit.
   - A client silent beyond 1.5 times its keepalive gets a best-effort DISCONNECT and its session ends; a later
-    packet from it gets DISCONNECT.
+    packet from it gets DISCONNECT. A stored will is published by the broker (see [will.md](will.md)).
   - With keepalive 0 the client is never timed out and the gateway sends no broker PINGREQ; PINGREQ is still
     answered and publishing still works.
 - Tests: TestClientPingGetsPingresp, TestPingreqGetsPingrespAndSessionSurvives, TestIdleClientSurvivesBrokerKeepalive, TestPeriodicPingreqKeepsClientAlive, TestSilentClientExpiresAndFreesSlot, TestSilentClientIsDisconnectedAfterInactivityLimit, TestZeroKeepaliveNeverExpires, TestZeroDurationNeverTimesOut, TestKeepaliveZeroSendsNoPingreq
@@ -45,8 +47,8 @@ disables all of this.
 ### Broker connection loss
 When the broker connection ends, the client is told instead of being left to fail later. Any loss cause ends
 the session and frees its slot: TCP close or read error, a failed broker write, an MQTT DISCONNECT, or a
-PINGREQ the broker never answers. Pending QoS 1 acknowledgements are abandoned. The session teardown, loss
-cause and client identity are logged, never payload bytes.
+PINGREQ the broker never answers. Pending QoS 1 acknowledgements are abandoned. A stored will is published by
+the broker. The session teardown, loss cause and client identity are logged, never payload bytes.
 - Criteria:
   - A dropped or reset broker connection, or an MQTT DISCONNECT from the broker, gives the client DISCONNECT;
     later packets from it get DISCONNECT.
@@ -84,8 +86,8 @@ Malformed input never crashes the gateway and never gets a reply.
 
 ## Not supported
 - Discovery (SEARCHGW, GWINFO, ADVERTISE); planned.
-- Will and sleep; planned. DISCONNECT with a duration is treated as a full disconnect, and a client declared
-  lost is not will-published.
+- Sleep; planned. DISCONNECT with a duration is treated as a full disconnect.
+- Will updates (WILLTOPICUPD, WILLMSGUPD) and will persistence across sessions; planned in later intents.
 - Gateway-originated PINGREQ towards clients: supervision is passive, based on packets the client sends.
 - Persistent (non-clean) broker sessions: CONNECT is accepted, but the broker session is always clean.
 - Reconnection or session resumption for the same client id; the client sends CONNECT again.

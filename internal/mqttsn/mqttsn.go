@@ -7,15 +7,19 @@ import (
 )
 
 const (
-	msgConnect    = 0x04
-	msgConnack    = 0x05
-	msgRegister   = 0x0A
-	msgRegack     = 0x0B
-	msgPublish    = 0x0C
-	msgPuback     = 0x0D
-	msgPingreq    = 0x16
-	msgPingresp   = 0x17
-	msgDisconnect = 0x18
+	msgConnect      = 0x04
+	msgConnack      = 0x05
+	msgRegister     = 0x0A
+	msgRegack       = 0x0B
+	msgPublish      = 0x0C
+	msgPuback       = 0x0D
+	msgWillTopicReq = 0x06
+	msgWillTopic    = 0x07
+	msgWillMsgReq   = 0x08
+	msgWillMsg      = 0x09
+	msgPingreq      = 0x16
+	msgPingresp     = 0x17
+	msgDisconnect   = 0x18
 
 	protocolID = 0x01
 
@@ -52,12 +56,12 @@ var (
 )
 
 // Message is one decoded MQTT-SN message: Connect, Connack, Register, Regack, Publish, Puback, Pingreq,
-// Pingresp or Disconnect.
+// Pingresp, Disconnect, WillTopicReq, WillTopic, WillMsgReq or WillMsg.
 type Message interface {
 	isMessage()
 }
 
-// Connect is a CONNECT message. Will is reported only; the will exchange is not implemented.
+// Connect is a CONNECT message. Will tells the gateway that the will handshake must run before the broker.
 type Connect struct {
 	CleanSession bool
 	Will         bool
@@ -117,15 +121,39 @@ type Disconnect struct {
 	HasDuration bool
 }
 
-func (Connect) isMessage()    {}
-func (Connack) isMessage()    {}
-func (Register) isMessage()   {}
-func (Regack) isMessage()     {}
-func (Publish) isMessage()    {}
-func (Puback) isMessage()     {}
-func (Pingreq) isMessage()    {}
-func (Pingresp) isMessage()   {}
-func (Disconnect) isMessage() {}
+// WillTopicReq asks the client for its will topic. It has no body.
+type WillTopicReq struct{}
+
+// WillTopic carries the will topic, QoS and retain flag. An empty Topic means the client wants no will: the
+// message is then exactly two bytes, and QoS and Retain must be zero. DUP, Will, CleanSession and TopicIDType
+// are not used and are not reported.
+type WillTopic struct {
+	QoS    byte
+	Retain bool
+	Topic  string
+}
+
+// WillMsgReq asks the client for its will message. It has no body.
+type WillMsgReq struct{}
+
+// WillMsg carries the will payload. Payload may be empty.
+type WillMsg struct {
+	Payload []byte
+}
+
+func (Connect) isMessage()      {}
+func (Connack) isMessage()      {}
+func (Register) isMessage()     {}
+func (Regack) isMessage()       {}
+func (Publish) isMessage()      {}
+func (Puback) isMessage()       {}
+func (Pingreq) isMessage()      {}
+func (Pingresp) isMessage()     {}
+func (Disconnect) isMessage()   {}
+func (WillTopicReq) isMessage() {}
+func (WillTopic) isMessage()    {}
+func (WillMsgReq) isMessage()   {}
+func (WillMsg) isMessage()      {}
 
 // Encode serialises m with its length header.
 func Encode(m Message) ([]byte, error) {
@@ -182,6 +210,27 @@ func Encode(m Message) ([]byte, error) {
 		if m.HasDuration {
 			body = []byte{byte(m.Duration >> 8), byte(m.Duration)}
 		}
+	case WillTopicReq:
+		typ = msgWillTopicReq
+	case WillTopic:
+		typ = msgWillTopic
+		if m.Topic != "" {
+			if m.QoS > qosMask {
+				return nil, fmt.Errorf("mqttsn: invalid WILLTOPIC QoS %d", m.QoS)
+			}
+			flags := m.QoS << qosShift
+			if m.Retain {
+				flags |= flagRetain
+			}
+			body = append([]byte{flags}, m.Topic...)
+		} else if m.QoS != 0 || m.Retain {
+			return nil, fmt.Errorf("%w: empty will topic with QoS or retain", ErrMalformed)
+		}
+	case WillMsgReq:
+		typ = msgWillMsgReq
+	case WillMsg:
+		typ = msgWillMsg
+		body = m.Payload
 	default:
 		return nil, fmt.Errorf("mqttsn: cannot encode %T", m)
 	}
@@ -290,6 +339,31 @@ func Decode(data []byte) (Message, error) {
 			return Disconnect{Duration: uint16(body[0])<<8 | uint16(body[1]), HasDuration: true}, nil
 		}
 		return nil, ErrMalformed
+	case msgWillTopicReq:
+		if len(body) != 0 {
+			return nil, ErrMalformed
+		}
+		return WillTopicReq{}, nil
+	case msgWillTopic:
+		switch len(body) {
+		case 0:
+			return WillTopic{}, nil
+		case 1:
+			return nil, ErrMalformed // flags without a topic name
+		}
+		return WillTopic{
+			QoS:    (body[0] >> qosShift) & qosMask,
+			Retain: body[0]&flagRetain != 0,
+			Topic:  string(body[1:]),
+		}, nil
+	case msgWillMsgReq:
+		if len(body) != 0 {
+			return nil, ErrMalformed
+		}
+		return WillMsgReq{}, nil
+	case msgWillMsg:
+		// Payload is copied: data aliases the caller's read buffer, which is reused.
+		return WillMsg{Payload: append([]byte(nil), body...)}, nil
 	}
 	return nil, ErrUnsupported
 }

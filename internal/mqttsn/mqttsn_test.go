@@ -31,6 +31,14 @@ func TestRoundTrip(t *testing.T) {
 		Pingreq{},
 		Pingreq{ClientID: "sensor-1"},
 		Pingresp{},
+		WillTopicReq{},
+		WillTopic{QoS: 1, Retain: true, Topic: "dev/status"},
+		WillTopic{QoS: 0, Topic: "a"},
+		WillTopic{},
+		WillMsgReq{},
+		WillMsg{Payload: []byte("offline")},
+		WillMsg{Payload: allBytes()},
+		WillMsg{},
 	}
 	for _, m := range cases {
 		b, err := Encode(m)
@@ -116,9 +124,12 @@ func TestRegisterAndRegackEncodeBytes(t *testing.T) {
 
 func TestEncodeInvalid(t *testing.T) {
 	cases := map[string]Message{
-		"register empty name": Register{TopicID: 0, MsgID: 1},
-		"publish qos 4":       Publish{QoS: 4},
-		"publish topic type":  Publish{TopicIDType: 4},
+		"register empty name":      Register{TopicID: 0, MsgID: 1},
+		"publish qos 4":            Publish{QoS: 4},
+		"publish topic type":       Publish{TopicIDType: 4},
+		"willtopic qos 4":          WillTopic{QoS: 4, Topic: "t"},
+		"willtopic empty with qos": WillTopic{QoS: 1},
+		"willtopic empty retain":   WillTopic{Retain: true},
 	}
 	for name, m := range cases {
 		if _, err := Encode(m); err == nil {
@@ -186,6 +197,9 @@ func TestDecodeErrors(t *testing.T) {
 		"puback no body":               {0x02, 0x0D},
 		"pingresp with body":           {0x03, 0x17, 0x00},
 		"pingresp long body":           {0x04, 0x17, 'a', 'b'},
+		"willtopicreq with body":       {0x03, 0x06, 0x00},
+		"willtopic flags only":         {0x03, 0x07, 0x20},
+		"willmsgreq with body":         {0x03, 0x08, 0x00},
 	}
 	for name, b := range cases {
 		if _, err := Decode(b); !errors.Is(err, ErrMalformed) {
@@ -216,6 +230,37 @@ func TestPingDecodeEmptyClientID(t *testing.T) {
 	}
 }
 
+func TestWillEncodeBytes(t *testing.T) {
+	b, _ := Encode(WillTopicReq{})
+	if !bytes.Equal(b, []byte{2, 0x06}) {
+		t.Fatalf("WILLTOPICREQ got % x", b)
+	}
+	b, _ = Encode(WillMsgReq{})
+	if !bytes.Equal(b, []byte{2, 0x08}) {
+		t.Fatalf("WILLMSGREQ got % x", b)
+	}
+	b, _ = Encode(WillTopic{})
+	if !bytes.Equal(b, []byte{2, 0x07}) {
+		t.Fatalf("empty WILLTOPIC got % x", b)
+	}
+	b, _ = Encode(WillTopic{QoS: 1, Retain: true, Topic: "ab"})
+	if !bytes.Equal(b, []byte{5, 0x07, 0x20 | 0x10, 'a', 'b'}) {
+		t.Fatalf("WILLTOPIC got % x", b)
+	}
+	b, _ = Encode(WillMsg{Payload: []byte("xy")})
+	if !bytes.Equal(b, []byte{4, 0x09, 'x', 'y'}) {
+		t.Fatalf("WILLMSG got % x", b)
+	}
+}
+
+func TestWillTopicDecodeIgnoresUnusedFlags(t *testing.T) {
+	// DUP, Will, CleanSession and TopicIdType bits are set; only QoS and Retain are read.
+	got, err := Decode([]byte{6, 0x07, 0x80 | 0x08 | 0x04 | 0x02 | 0x01, 'a', 'b', 'c'})
+	if err != nil || got != (WillTopic{Topic: "abc"}) {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
 func TestDecodeUnsupported(t *testing.T) {
 	// SUBSCRIBE (0x12) is valid MQTT-SN but not implemented yet.
 	if _, err := Decode([]byte{0x02, 0x12}); !errors.Is(err, ErrUnsupported) {
@@ -229,6 +274,7 @@ func FuzzDecode(f *testing.F) {
 		Register{TopicID: 0, MsgID: 1, TopicName: "a/b"}, Regack{TopicID: 1, MsgID: 1},
 		Publish{QoS: 1, TopicID: 1, MsgID: 2, Data: []byte("x")}, Puback{TopicID: 1, MsgID: 2},
 		Pingreq{}, Pingreq{ClientID: "a"}, Pingresp{},
+		WillTopicReq{}, WillTopic{QoS: 1, Retain: true, Topic: "a"}, WillMsgReq{}, WillMsg{Payload: []byte("x")},
 	} {
 		b, _ := Encode(m)
 		f.Add(b)

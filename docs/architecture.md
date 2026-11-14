@@ -1,8 +1,8 @@
 # Architecture
 
-Current state after the session-liveness intent (connect, registered-topic QoS 0 and QoS 1 publish, disconnect,
-bad-input handling, client timeouts, gateway-side broker keepalive and broker-loss handling). Decisions:
-`docs/adr/` and `docs/branch/adr/`.
+Current state after the will intent (connect, registered-topic QoS 0 and QoS 1 publish, disconnect, bad-input
+handling, client timeouts, broker keepalive, broker-loss handling, will handshake and will publication).
+Decisions: `docs/adr/` and `docs/branch/adr/`.
 
 ```
  MQTT-SN client --UDP--> [ router ] --inbox--> [ session goroutine ] --TCP--> MQTT broker
@@ -21,7 +21,7 @@ bad-input handling, client timeouts, gateway-side broker keepalive and broker-lo
 | `cmd/butterfly-sn` | `main`: signals (SIGINT, SIGTERM), calls `internal/app` |
 | `internal/app` | Startup path shared by `main` and the e2e tests: flags, config, logging, run |
 | `internal/config` | YAML loading, defaults, validation (unknown keys rejected) |
-| `internal/mqttsn` | MQTT-SN packet codec, no I/O (CONNECT, CONNACK, REGISTER, REGACK, PUBLISH, PUBACK, PINGREQ, PINGRESP, DISCONNECT) |
+| `internal/mqttsn` | MQTT-SN packet codec, no I/O (CONNECT, CONNACK, REGISTER, REGACK, PUBLISH, PUBACK, PINGREQ, PINGRESP, DISCONNECT, WILLTOPICREQ, WILLTOPIC, WILLMSGREQ, WILLMSG) |
 | `internal/gateway` | UDP listener and router; one session goroutine, one broker reader goroutine and a normal-topic table per client |
 | `butterfly-mqtt-client/` | Standalone MQTT 3.1.1 client module (own `go.mod`, stdlib only, no gateway concepts), joined by a `replace` directive so it can move to its own repo |
 | `test/e2e` | End-to-end tests: gateway in-process, real Mosquitto in a container (testcontainers-go, Docker), plain MQTT observer |
@@ -33,6 +33,10 @@ bad-input handling, client timeouts, gateway-side broker keepalive and broker-lo
   rejected with DISCONNECT without creating a session or contacting the broker. The session goroutine dials
   the broker with a timeout, sends MQTT CONNECT, and answers CONNACK Accepted, or Congestion if anything
   failed.
+- A CONNECT with the Will flag runs the will handshake before any broker contact: WILLTOPICREQ, WILLTOPIC,
+  WILLMSGREQ, WILLMSG. An empty will topic skips the message prompt and connects without a will; a QoS 2 will
+  gets CONNACK Not supported. The whole handshake has a 10 second timeout; on timeout the session is removed
+  and the client gets DISCONNECT. The collected will travels in the broker CONNECT.
 - Any other valid packet from an address with no live session gets DISCONNECT; DISCONNECT itself is ignored
   there to avoid an answer loop. This is also the case for a client whose session just ended.
 - REGISTER adds the exact topic name to the session's table and answers REGACK. New ids are allocated from 1 to
@@ -57,9 +61,12 @@ bad-input handling, client timeouts, gateway-side broker keepalive and broker-lo
   sends a best-effort MQTT-SN DISCONNECT to the client and removes the session, so its slot is free again and
   pending QoS 1 acknowledgements are abandoned. The broker socket is closed without another MQTT DISCONNECT.
 - DISCONNECT sends MQTT DISCONNECT to the broker, replies DISCONNECT, and removes the session.
-- On shutdown (context cancel) every session disconnects from the broker, sends DISCONNECT to its client, and the
-  socket closes. Closing the broker connection unblocks the reader; the session cancels it and waits for it to
-  return before the session ends.
+- A will-bearing session that ends without the client's consent (keepalive timeout or gateway shutdown) closes
+  its broker socket without MQTT DISCONNECT, so the broker publishes the stored will. An explicit client
+  DISCONNECT stays graceful; on broker loss the broker publishes the will itself.
+- On shutdown (context cancel) every session ends its broker connection (MQTT DISCONNECT, or a bare close when
+  it has a will), sends DISCONNECT to its client, and the socket closes. Closing the broker connection unblocks
+  the reader; the session cancels it and waits for it to return before the session ends.
 
 ## Test observer
 The e2e suite uses `butterfly-mqtt-client` directly against Mosquitto for its independent observer. The client's
