@@ -34,12 +34,7 @@ func (s *session) bufferDownlink(broker *mqtt.Client, e mqtt.Event, log *slog.Lo
 // goes through bufferDownlink, so QoS 1 is acknowledged here and a full buffer drops it. An error means the broker
 // write failed.
 func (s *session) holdToSleep(broker *mqtt.Client, log *slog.Logger) error {
-	regs := make([]*pendingReg, 0, len(s.pendingRegs))
-	for _, reg := range s.pendingRegs {
-		regs = append(regs, reg)
-	}
-	sort.Slice(regs, func(i, j int) bool { return regs[i].seq < regs[j].seq })
-	for _, reg := range regs {
+	for _, reg := range s.sortedRegs() {
 		for _, e := range reg.held {
 			if err := s.bufferDownlink(broker, e, log); err != nil {
 				return err
@@ -52,6 +47,31 @@ func (s *session) holdToSleep(broker *mqtt.Client, log *slog.Logger) error {
 	s.pendingRegs = make(map[uint16]*pendingReg)
 	s.regByTopic = make(map[string]uint16)
 	s.clearRetries()
+	return nil
+}
+
+// sortedRegs returns the pending registrations in the order they were made.
+func (s *session) sortedRegs() []*pendingReg {
+	regs := make([]*pendingReg, 0, len(s.pendingRegs))
+	for _, reg := range s.pendingRegs {
+		regs = append(regs, reg)
+	}
+	sort.Slice(regs, func(i, j int) bool { return regs[i].seq < regs[j].seq })
+	return regs
+}
+
+// enterSleep puts the client to sleep for duration, replacing the sleep duration of an earlier sleep, and clears
+// the flush flags. A running flush is interrupted (see interruptFlush); otherwise pending registrations are held as
+// on any sleep entry. Sleeping after a CONNECT wake is an entry like any other. An error means a broker write failed.
+func (s *session) enterSleep(broker *mqtt.Client, duration uint16, log *slog.Logger) error {
+	if s.flushing {
+		s.interruptFlush(log)
+	} else if err := s.holdToSleep(broker, log); err != nil {
+		return err
+	}
+	s.sleeping = true
+	s.sleepDuration = duration
+	s.flushing, s.flushPing = false, false
 	return nil
 }
 

@@ -4,7 +4,7 @@ How closely butterfly-sn follows the MQTT-SN v1.2 specification (`olddocs/MQTT-S
 deliberately or accidentally departs from it, and which features it does not offer. Read this before putting a
 client on the gateway that you did not test.
 
-- Reviewed: 2026-11-14, `develop` at commit `9621695`.
+- Reviewed: 2026-11-14, `develop` at commit `9621695`. D1, D3 and D11 were fixed afterwards (see below).
 - Gateway type: transparent gateway (section 4.1), UDP over IPv4 on the MQTT-SN side, MQTT 3.1.1 over plain TCP on
   the broker side, one broker connection per client.
 - Scope of the review: the whole specification (sections 3 to 7). Each message, field, procedure and recommended
@@ -25,14 +25,14 @@ compares that behaviour with the standard.
 |---|---|
 | Message formats: header and 3-byte lengths, message types, flag bits, field order and byte order | Compliant |
 | Discovery: ADVERTISE, SEARCHGW, GWINFO formats and timers | Compliant, with minor departures (D17) |
-| Connection setup and will handshake (WILLTOPICREQ, WILLTOPIC, WILLMSGREQ, WILLMSG) | Compliant for QoS 0 and 1; departures D3, D4, D14 |
+| Connection setup and will handshake (WILLTOPICREQ, WILLTOPIC, WILLMSGREQ, WILLMSG) | Compliant for QoS 0 and 1; departures D4, D14 (D3 fixed) |
 | CleanSession | **Not honoured** (D5) |
 | Will update (WILLTOPICUPD, WILLMSGUPD) | **Rejected on purpose** (D6) |
 | Topic registration, PUBLISH and PUBACK for QoS 0 and 1, short topic names | Compliant for the happy path; error signalling departs (D7, D8, D9) |
 | SUBSCRIBE and UNSUBSCRIBE, wildcards | Compliant, except QoS 2 requests (D12) |
-| Gateway-originated REGISTER and PUBLISH, retransmission with DUP | Compliant, with the departures D11 and D19 |
+| Gateway-originated REGISTER and PUBLISH, retransmission with DUP | Compliant, with the departure D19 (D11 fixed) |
 | Keep-alive and PING | Compliant, with a different timer tolerance (D2) |
-| Sleeping clients | Partly compliant: **re-sleeping is broken** (D1), buffer limits (D10), CONNECT while asleep (D4) |
+| Sleeping clients | Mostly compliant: buffer limits (D10), CONNECT while asleep (D4); re-sleeping fixed (D1) |
 | QoS 2, QoS -1, predefined topic ids, forwarder encapsulation, aggregating gateway | **Not supported** (see "Features that are missing") |
 
 ## Features that are missing
@@ -59,7 +59,7 @@ Severity describes the risk for a standards-compliant client: **high** can stran
 documented decision; the rest are defects or gaps that no decision covers yet.
 
 ### High
-**D1. DISCONNECT with a duration while asleep or awake ends the session (6.14, 5.4.21), a defect.** The
+**D1. FIXED. DISCONNECT with a duration while asleep or awake ended the session (6.14, 5.4.21).** A DISCONNECT with a duration now changes the sleep duration and keeps the client asleep, also in the middle of a wake-up flush; see `docs/spec/sleep.md`. What it was: the
 specification lets a client change its sleep duration, and return to sleep after a wake, with a new DISCONNECT that
 carries a duration. The gateway treats it as a full disconnect: the broker connection is closed, the session is
 removed and the client gets a plain DISCONNECT. The client believes it is asleep but has no session, so its next
@@ -73,7 +73,7 @@ the keep-alive and the sleep timer. For a 300 s keep-alive it waits 450 s instea
 client lost and letting the broker publish its will. It never acts earlier than the standard allows. Up to 60 s the
 two agree.
 
-**D3. CONNECT from an address that already has a live session is ignored (6.2), a defect.** No CONNACK is sent. A
+**D3. FIXED. CONNECT from an address that already had a live session was ignored (6.2).** The new CONNECT now replaces the old session (no will is published); see `docs/spec/transport-and-sessions.md`. What it was: No CONNACK is sent. A
 client that reboots and reconnects from the same address and port gets no answer until its old session times out
 (1.5 times the keep-alive), and never when the keep-alive is 0. Confirmed in the code.
 
@@ -108,7 +108,7 @@ in the table and later messages keep using it.
 newest beyond that, and QoS 1 messages are acknowledged to the broker when they are buffered. A message that is
 dropped, or lost with the gateway, therefore looks delivered to the broker.
 
-**D11. Oversize downlink messages end up disconnecting the client (6.10), a defect.** A message too large to encode
+**D11. FIXED. Oversize downlink messages ended up disconnecting the client (6.10).** They are now dropped silently as the standard says and the client stays connected; see `docs/spec/topics-and-pubsub.md`. What it was: a message too large to encode
 or send (more than 65 535 bytes, or more than a UDP datagram allows) is not sent, but its REGISTER or QoS 1
 PUBLISH stays in the retry set. After the retries the client is declared lost, disconnected, and its will fires.
 The standard says the gateway silently aborts such a publication. Confirmed in the code.
@@ -175,6 +175,6 @@ requirements of the standard. See the ADR `20261114-gateway-retry-and-pending-ti
 - Retry values within the recommended ranges of 7.2 (Tretry 10 s, Nretry 5).
 
 ## Closing the gaps
-The defects above (D1, D3, D4, D11, and the error signalling of D7 and D9) are the best candidates for the next
-intents, followed by D8 and D12. Each would be handled as its own intent with an ADR and an update of this file and
+D1, D3 and D11 are fixed. D4 and the error signalling of D7 and D9 are the best candidates for the next intents,
+followed by D8 and D12. Each would be handled as its own intent with an ADR and an update of this file and
 of `docs/spec/`.

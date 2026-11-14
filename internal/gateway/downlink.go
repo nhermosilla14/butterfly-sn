@@ -95,9 +95,14 @@ func (s *session) handleDownlink(broker *mqtt.Client, e mqtt.Event, log *slog.Lo
 	}
 	msgID := s.nextRegMsgID()
 	s.regSeq++
-	s.pendingRegs[msgID] = &pendingReg{topic: e.Topic, topicID: id, held: []mqtt.Event{e}, seq: s.regSeq}
+	reg := &pendingReg{topic: e.Topic, topicID: id, held: []mqtt.Event{e}, seq: s.regSeq}
+	s.pendingRegs[msgID] = reg
 	s.regByTopic[e.Topic] = msgID
-	s.sendSupervised(kindRegister, msgID, mqttsn.Register{TopicID: id, MsgID: msgID, TopicName: e.Topic})
+	if err := s.sendSupervised(kindRegister, msgID, mqttsn.Register{TopicID: id, MsgID: msgID, TopicName: e.Topic}); err != nil {
+		log.Warn("dropped downlink PUBLISH: REGISTER too large to send", "msg_id", msgID, "error", err)
+		s.forgetRegister(msgID, reg)
+		return s.dropDownlink(broker, e)
+	}
 	return nil
 }
 
@@ -108,10 +113,14 @@ func (s *session) sendDownlink(broker *mqtt.Client, topicID uint16, e mqtt.Event
 
 // sendDownlinkTo sends a broker PUBLISH to the client on topicID of type topicIDType. QoS 1 uses the broker packet
 // id as msg id and is recorded in pendingDownlink until the client's PUBACK. A QoS 1 message is dropped, and the
-// broker acknowledged, when pendingDownlink is full.
+// broker acknowledged, when pendingDownlink is full or the datagram is too large to send. A QoS 0 message too large
+// to send is dropped.
 func (s *session) sendDownlinkTo(broker *mqtt.Client, topicIDType byte, topicID uint16, e mqtt.Event, log *slog.Logger) error {
 	if e.QoS == 0 {
-		s.gw.sendTo(s.addr, mqttsn.Publish{Retain: e.Retain, TopicIDType: topicIDType, TopicID: topicID, Data: e.Payload})
+		m := mqttsn.Publish{Retain: e.Retain, TopicIDType: topicIDType, TopicID: topicID, Data: e.Payload}
+		if err := s.gw.send(s.addr, m); err != nil {
+			log.Warn("dropped downlink PUBLISH: too large to send", "error", err)
+		}
 		return nil
 	}
 	if s.downlinkAwaitingPuback(e.PacketID) {
@@ -126,7 +135,11 @@ func (s *session) sendDownlinkTo(broker *mqtt.Client, topicIDType byte, topicID 
 		log.Warn("too many downlink PUBLISH awaiting client PUBACK, dropping")
 		return s.dropDownlink(broker, e)
 	}
-	s.sendSupervised(kindPublish, e.PacketID, mqttsn.Publish{QoS: 1, Retain: e.Retain, DUP: e.DUP, TopicIDType: topicIDType, TopicID: topicID, MsgID: e.PacketID, Data: e.Payload})
+	m := mqttsn.Publish{QoS: 1, Retain: e.Retain, DUP: e.DUP, TopicIDType: topicIDType, TopicID: topicID, MsgID: e.PacketID, Data: e.Payload}
+	if err := s.sendSupervised(kindPublish, e.PacketID, m); err != nil {
+		log.Warn("dropped downlink PUBLISH: too large to send", "packet_id", e.PacketID, "error", err)
+		return s.dropDownlink(broker, e)
+	}
 	s.pendingDownlink[e.PacketID] = topicID
 	return nil
 }
@@ -166,9 +179,8 @@ func (s *session) handleRegack(broker *mqtt.Client, m mqttsn.Regack, log *slog.L
 		log.Warn("ignored REGACK for unknown msg id", "msg_id", m.MsgID)
 		return nil
 	}
-	delete(s.pendingRegs, m.MsgID)
-	delete(s.regByTopic, reg.topic)
 	if m.ReturnCode != mqttsn.ReturnAccepted {
+		s.forgetRegister(m.MsgID, reg)
 		log.Warn("client rejected topic registration, dropping held PUBLISHes", "return_code", m.ReturnCode, "topic_id", reg.topicID)
 		for _, e := range reg.held {
 			if reg.fromSleep {
@@ -178,12 +190,10 @@ func (s *session) handleRegack(broker *mqtt.Client, m mqttsn.Regack, log *slog.L
 				return err
 			}
 		}
-		// The client does not know this id, so forget the name: a later PUBLISH registers it afresh.
-		if id, ok := s.topics.idOf(reg.topic); ok && id == reg.topicID {
-			s.topics.remove(reg.topic)
-		}
 		return nil
 	}
+	delete(s.pendingRegs, m.MsgID)
+	delete(s.regByTopic, reg.topic)
 	for _, e := range reg.held {
 		if reg.fromSleep {
 			s.sendFlushed(mqttsn.TopicIDNormal, reg.topicID, e, log)
@@ -194,6 +204,17 @@ func (s *session) handleRegack(broker *mqtt.Client, m mqttsn.Regack, log *slog.L
 		}
 	}
 	return nil
+}
+
+// forgetRegister drops the gateway REGISTER msgID for reg: it leaves pendingRegs and regByTopic, and its name is
+// removed from the table, since the client does not know the id. A later PUBLISH registers the name afresh. The
+// name is kept when the table now maps it to another id.
+func (s *session) forgetRegister(msgID uint16, reg *pendingReg) {
+	delete(s.pendingRegs, msgID)
+	delete(s.regByTopic, reg.topic)
+	if id, ok := s.topics.idOf(reg.topic); ok && id == reg.topicID {
+		s.topics.remove(reg.topic)
+	}
 }
 
 // handleClientPuback acknowledges a downlink QoS 1 PUBLISH to the broker once the client has PUBACKed it.

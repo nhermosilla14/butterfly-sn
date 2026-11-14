@@ -50,19 +50,27 @@ func (s *session) flushHead(log *slog.Logger) bool {
 	}
 	msgID := s.nextRegMsgID()
 	s.regSeq++
-	s.pendingRegs[msgID] = &pendingReg{topic: e.Topic, topicID: id, held: []mqtt.Event{e}, fromSleep: true, seq: s.regSeq}
+	reg := &pendingReg{topic: e.Topic, topicID: id, held: []mqtt.Event{e}, fromSleep: true, seq: s.regSeq}
+	s.pendingRegs[msgID] = reg
 	s.regByTopic[e.Topic] = msgID
-	s.sendSupervised(kindRegister, msgID, mqttsn.Register{TopicID: id, MsgID: msgID, TopicName: e.Topic})
+	if err := s.sendSupervised(kindRegister, msgID, mqttsn.Register{TopicID: id, MsgID: msgID, TopicName: e.Topic}); err != nil {
+		log.Warn("dropped buffered PUBLISH: REGISTER too large to send", "msg_id", msgID, "error", err)
+		s.forgetRegister(msgID, reg)
+	}
 	return true
 }
 
 // sendFlushed sends a buffered PUBLISH to the client on topicID of type topicIDType. The broker was acknowledged
 // when the message was buffered, so a QoS 1 message gets a fresh gateway msg id: the broker may have reused its
 // packet id since. The msg id goes in preAcked, so the client's PUBACK produces no second broker PUBACK. When
-// preAcked is full the QoS 1 message is dropped and logged; it is not sent and is not acknowledged again.
+// preAcked is full the QoS 1 message is dropped and logged; it is not sent and is not acknowledged again. A message
+// too large to send is dropped the same way.
 func (s *session) sendFlushed(topicIDType byte, topicID uint16, e mqtt.Event, log *slog.Logger) {
 	if e.QoS == 0 {
-		s.gw.sendTo(s.addr, mqttsn.Publish{Retain: e.Retain, TopicIDType: topicIDType, TopicID: topicID, Data: e.Payload})
+		m := mqttsn.Publish{Retain: e.Retain, TopicIDType: topicIDType, TopicID: topicID, Data: e.Payload}
+		if err := s.gw.send(s.addr, m); err != nil {
+			log.Warn("dropped buffered PUBLISH: too large to send", "error", err)
+		}
 		return
 	}
 	if len(s.preAcked) >= maxPreAcked {
@@ -70,7 +78,11 @@ func (s *session) sendFlushed(topicIDType byte, topicID uint16, e mqtt.Event, lo
 		return
 	}
 	msgID := s.nextFlushMsgID()
-	s.sendSupervised(kindPublish, msgID, mqttsn.Publish{QoS: 1, Retain: e.Retain, DUP: e.DUP, TopicIDType: topicIDType, TopicID: topicID, MsgID: msgID, Data: e.Payload})
+	m := mqttsn.Publish{QoS: 1, Retain: e.Retain, DUP: e.DUP, TopicIDType: topicIDType, TopicID: topicID, MsgID: msgID, Data: e.Payload}
+	if err := s.sendSupervised(kindPublish, msgID, m); err != nil {
+		log.Warn("dropped buffered PUBLISH: too large to send", "msg_id", msgID, "error", err)
+		return
+	}
 	s.preAcked[msgID] = struct{}{}
 }
 
@@ -105,6 +117,30 @@ func (s *session) sleepRegPending() bool {
 		}
 	}
 	return false
+}
+
+// interruptFlush ends a running flush for a re-sleep. The messages held for pending sleep-origin REGISTERs go back to
+// the front of the buffer in registration order. They were acknowledged to the broker when first buffered, so they
+// are not acknowledged again. Their topic names are forgotten and the retry set is cleared; QoS 1 PUBLISHes awaiting
+// the client's PUBACK are parked as on any sleep entry, and pre-acknowledged ids stay, so a late PUBACK is absorbed.
+// Every registration of a flush is sleep-origin, since broker PUBLISHes are buffered while flushing. The buffer cap
+// still applies: messages beyond it, at the back, are dropped and logged.
+func (s *session) interruptFlush(log *slog.Logger) {
+	var front []mqtt.Event
+	for _, reg := range s.sortedRegs() {
+		front = append(front, reg.held...)
+		if id, ok := s.topics.idOf(reg.topic); ok && id == reg.topicID {
+			s.topics.remove(reg.topic)
+		}
+	}
+	s.pendingRegs = make(map[uint16]*pendingReg)
+	s.regByTopic = make(map[string]uint16)
+	s.clearRetries()
+	s.sleepBuf = append(front, s.sleepBuf...)
+	if n := len(s.sleepBuf) - maxSleepBuffer; n > 0 {
+		log.Warn("sleep buffer full, dropping newest PUBLISHes", "dropped", n)
+		s.sleepBuf = s.sleepBuf[:maxSleepBuffer]
+	}
 }
 
 // popBuffer removes the head of the buffer.

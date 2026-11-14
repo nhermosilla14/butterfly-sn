@@ -54,6 +54,9 @@ type session struct {
 	pingOutstanding bool
 	// will is the client's will, collected by awaitWill before the broker is dialled. It is never logged.
 	will willState
+	// connackAt is when the CONNACK of this session was sent. A CONNECT that arrived before it is a retransmission
+	// of the one that started the session. See the Connect case of run.
+	connackAt time.Time
 	// sleeping is set while the client sleeps after a DISCONNECT with a duration. See sleep.go.
 	sleeping bool
 	// sleepDuration is the duration the client asked for when it went to sleep. The sleep timer uses 1.5 times it.
@@ -158,6 +161,7 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 		return
 	}
 	log.Info("client connected")
+	s.connackAt = time.Now()
 	s.gw.sendTo(s.addr, mqttsn.Connack{ReturnCode: mqttsn.ReturnAccepted})
 	// The client's silence is counted from the CONNACK, so broker dialing does not use up its allowance.
 	lastClient := time.Now()
@@ -303,7 +307,9 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 				runFlush()
 			case mqttsn.Connect:
 				if !s.sleeping {
-					log.Debug("ignored packet", "type", m)
+					if s.reconnect(ctx, broker, in, m) {
+						return
+					}
 					break
 				}
 				// The CONNECT duration, clean-session flag and will are ignored: the broker session is kept.
@@ -319,11 +325,10 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 				}
 				runFlush()
 			case mqttsn.Disconnect:
-				if m.HasDuration && m.Duration > 0 && !s.sleeping && !s.flushing {
-					// Sleep: the broker stays connected and the client gets its DISCONNECT as the reply.
-					s.sleeping = true
-					s.sleepDuration = m.Duration
-					if err := s.holdToSleep(broker, log); err != nil {
+				if m.HasDuration && m.Duration > 0 {
+					// Sleep, or a new sleep duration: the broker stays connected and the client gets its DISCONNECT
+					// as the reply.
+					if err := s.enterSleep(broker, m.Duration, log); err != nil {
 						s.loseBroker(log, err)
 						return
 					}
@@ -441,6 +446,26 @@ func (s *session) awaitWill(ctx context.Context, log *slog.Logger) bool {
 			}
 		}
 	}
+}
+
+// reconnect handles a CONNECT from an active client. A CONNECT that arrived before this session's CONNACK is a
+// retransmission of the one that started it and is ignored, as is one with an empty client id. Any other one
+// replaces the session: the broker gets MQTT DISCONNECT, so no will is published, and the gateway starts a session
+// for the CONNECT in this one's place. The client gets no DISCONNECT. It returns true when the session was ended
+// for a replacement, and the caller then returns. A session that was already ending gets no new one.
+func (s *session) reconnect(ctx context.Context, broker *mqtt.Client, in inbound, m mqttsn.Connect) bool {
+	if in.at.Before(s.connackAt) {
+		s.gw.log.Debug("ignored CONNECT before CONNACK", "client", s.addr.String(), "client_id", m.ClientID)
+		return false
+	}
+	if m.ClientID == "" {
+		s.gw.log.Warn("CONNECT with empty client id ignored", "client", s.addr.String())
+		return false
+	}
+	s.gw.log.Info("client reconnected, replacing session", "client", s.addr.String(), "client_id", m.ClientID)
+	_ = broker.Disconnect()
+	s.gw.replaceSession(ctx, s, m)
+	return true
 }
 
 // loseBroker ends the session after the broker connection is lost. The client gets one DISCONNECT, sent after

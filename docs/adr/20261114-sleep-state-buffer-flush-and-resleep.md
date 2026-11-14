@@ -1,5 +1,6 @@
-# Sleep state, buffering and wake-up flush
+# Sleep state, buffering, wake-up flush and re-sleep
 
+- Replaces: 20261114-sleep-state-and-buffer-flush
 - Status: Accepted
 - Date: 2026-11-14
 - Deciders: Nicolás Hermosilla
@@ -7,6 +8,10 @@
 - Spec area: sleep.md, transport-and-sessions.md, topics-and-pubsub.md
 
 ## Context
+This replaces the decision that a DISCONNECT from asleep or awake is always a normal disconnect, which
+contradicted MQTT-SN 6.14 (conformance finding D1); the rest of the decision is restated unchanged except that a
+missing REGACK is now bounded by the retry ADR.
+
 A sleeping MQTT-SN client keeps its session and broker connection but stops sending. The gateway must buffer
 downlink messages, deliver them when the client wakes, and not lose or duplicate broker acknowledgements. The
 legacy gateway acknowledged QoS 1 at buffering time, capped the queue at 20, dropped the newest, and never sent
@@ -35,7 +40,8 @@ downlink hold and REGISTER machinery, and timers for keepalive and inactivity.
 - Flush: each buffered message is resolved in order. Known table topics use their id; tracked short
   subscriptions use the short form; unknown topics allocate an id, send REGISTER and wait for REGACK through the
   existing hold machinery. A rejected REGACK drops the entry. PINGRESP is delayed while a REGISTER for a buffered
-  message is outstanding; a missing REGACK waits indefinitely until the retransmission intent bounds it.
+  message is outstanding; a missing REGACK is bounded by the retry timers of
+  20261114-gateway-retry-and-pending-timeouts.
 - Buffered QoS 1 messages were acknowledged to the broker when buffered, so the broker may have reused their
   packet ids by the time the client wakes. On flush each buffered QoS 1 message therefore gets a gateway-assigned
   msg id (1..65535, not in use by another delivery). Its client PUBACK is matched against a pre-acknowledged set
@@ -47,8 +53,18 @@ downlink hold and REGISTER machinery, and timers for keepalive and inactivity.
   a duplicate MQTT-SN msg id.
 - A CONNECT wake arms the active inactivity timer immediately, at CONNACK time, because the client is active from
   then on.
-- DISCONNECT from asleep or awake is a normal disconnect: MQTT DISCONNECT, client DISCONNECT, session removed and
-  buffer dropped. Sleep timer expiry is a loss: remove the session, close the broker socket bare when a will
+- DISCONNECT without a duration, or with duration 0, from asleep or awake is a normal disconnect: MQTT
+  DISCONNECT, client DISCONNECT, session removed and buffer dropped.
+- DISCONNECT with a duration above 0 from asleep or awake is a re-sleep (MQTT-SN 6.14: the client may change its
+  sleep duration, and return to sleep, this way). The session, broker connection, topic table, subscriptions and
+  buffer stay. The sleep duration is replaced, the sleep timer is re-armed at 1.5 times the new duration and the
+  client gets DISCONNECT. No will is published. If a flush was running it is interrupted: buffered messages not yet
+  sent stay in the buffer in order; the messages held for a pending sleep-origin REGISTER return to the front of
+  the buffer in registration order, without a second broker PUBACK because the broker was acknowledged when they
+  were first buffered; pending REGISTER and PUBLISH entries leave the retry set; QoS 1 PUBLISHes already sent and
+  recorded in the pre-acknowledged set stay there, so a late client PUBACK is still absorbed; and the topic names
+  of dropped registrations are forgotten as on any sleep entry. A re-sleep that arrives after a CONNECT wake
+  (client active, not sleeping) is handled as the first sleep entry. Sleep timer expiry is a loss: remove the session, close the broker socket bare when a will
   exists (publishing it), otherwise send MQTT DISCONNECT, send a best-effort client DISCONNECT and drop the
   buffer.
 - Any packet from an asleep client other than PINGREQ, CONNECT or DISCONNECT is ignored and logged, except the
@@ -64,7 +80,8 @@ downlink hold and REGISTER machinery, and timers for keepalive and inactivity.
 - Unbounded buffer or byte-size cap — 20 messages matches legacy and keeps memory bounded.
 
 ## Consequences
-Sleeping clients no longer lose the broker session and can receive messages on wake. QoS 1 buffered messages can
+A client can change its sleep duration and go back to sleep after a wake without losing its session. An interrupted
+flush costs no messages, only a later flush. Sleeping clients no longer lose the broker session and can receive messages on wake. QoS 1 buffered messages can
 be acked and then lost on a full buffer, which is visible in logs and documented. PINGRESP is now reliable after a
 flush, fixing the legacy bug, but a lost REGACK stalls the wake until the retransmission work adds timers. The
 buffer and pre-acknowledged map are small and per session, so 100 clients stay bounded. Will publication on sleep

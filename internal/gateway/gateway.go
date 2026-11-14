@@ -21,9 +21,14 @@ const (
 	brokerTimeout = 5 * time.Second
 	inboxSize     = 16
 	maxDatagram   = 65535
+	// maxUDPPayload is the largest UDP payload over IPv4. A larger datagram cannot be sent.
+	maxUDPPayload = 65507
 	// maxDiscoveryDelay bounds the random wait before a GWINFO reply, so searching clients do not all answer at once.
 	maxDiscoveryDelay = 500 * time.Millisecond
 )
+
+// errTooLarge marks a message that cannot be sent as one datagram. See Gateway.send.
+var errTooLarge = errors.New("message too large to send")
 
 // discoveryDelay picks the wait before a GWINFO reply. Tests replace it to avoid sleeping.
 var discoveryDelay = func() time.Duration { return rand.N(maxDiscoveryDelay) }
@@ -202,10 +207,27 @@ func (g *Gateway) openSessionLocked(ctx context.Context, key string, addr *net.U
 		g.sendTo(addr, mqttsn.Connack{ReturnCode: mqttsn.ReturnCongestion})
 		return
 	}
+	g.startSessionLocked(ctx, key, addr, c)
+}
+
+// startSessionLocked starts a session for the CONNECT c under key. The caller holds g.mu.
+func (g *Gateway) startSessionLocked(ctx context.Context, key string, addr *net.UDPAddr, c mqttsn.Connect) {
 	s := &session{gw: g, key: key, addr: addr, inbox: make(chan inbound, inboxSize)}
 	g.sessions[key] = s
 	g.wg.Add(1)
 	go s.run(ctx, c)
+}
+
+// replaceSession starts a session for the CONNECT c in place of old, the active session under old's key. The swap
+// happens under g.mu, so no packet sees the slot empty, and max_clients is not checked since the slot is reused.
+// If old is no longer the session of its key, because it is already ending, nothing is started and the client
+// retransmits its CONNECT.
+func (g *Gateway) replaceSession(ctx context.Context, old *session, c mqttsn.Connect) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.sessions[old.key] == old {
+		g.startSessionLocked(ctx, old.key, old.addr, c)
+	}
 }
 
 func (g *Gateway) removeSession(s *session) {
@@ -217,15 +239,27 @@ func (g *Gateway) removeSession(s *session) {
 }
 
 func (g *Gateway) sendTo(addr *net.UDPAddr, m mqttsn.Message) {
+	if err := g.send(addr, m); err != nil {
+		g.log.Error("message not sent", "error", err)
+	}
+}
+
+// send encodes m and writes it to addr. It returns an error wrapping errTooLarge, and sends nothing, when m cannot
+// be encoded or its datagram exceeds maxUDPPayload. The error carries sizes only. A write error is logged and not
+// returned, so the caller treats the message as sent.
+func (g *Gateway) send(addr *net.UDPAddr, m mqttsn.Message) error {
 	if g.conn == nil {
-		return
+		return nil
 	}
 	b, err := mqttsn.Encode(m)
 	if err != nil {
-		g.log.Error("encode failed", "error", err)
-		return
+		return fmt.Errorf("%w: %v", errTooLarge, err)
+	}
+	if len(b) > maxUDPPayload {
+		return fmt.Errorf("%w: %d bytes", errTooLarge, len(b))
 	}
 	if _, err := g.conn.WriteToUDP(b, addr); err != nil {
 		g.log.Warn("send failed", "to", addr, "error", err)
 	}
+	return nil
 }

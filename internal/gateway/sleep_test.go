@@ -184,19 +184,16 @@ func TestDisconnectWhileAsleepIsNormal(t *testing.T) {
 	expectNoSessions(t, r.g)
 }
 
-// TestSecondSleepDisconnectWhileAsleepIsNormal: a DISCONNECT with a duration from asleep does not sleep again. It
-// ends the session like any other DISCONNECT.
-func TestSecondSleepDisconnectWhileAsleepIsNormal(t *testing.T) {
+// TestResleepWhileAsleepKeepsSession: a DISCONNECT with a duration from asleep is a re-sleep, not a disconnect. The
+// client gets DISCONNECT, and the session stays: the next PINGREQ gets PINGRESP.
+func TestResleepWhileAsleepKeepsSession(t *testing.T) {
 	r := startWillRig(t, 10)
 	r.openSession("sleep-twice", 60, true)
 	sleepClient(t, r.client, r.gwAddr, 5)
 
-	sendSN(t, r.client, r.gwAddr, mqttsn.Disconnect{Duration: 5, HasDuration: true})
-	readAs[mqttsn.Disconnect](t, r.client)
-	if !r.broker.waitClosed(t) {
-		t.Fatal("broker got no MQTT DISCONNECT after second sleep DISCONNECT")
-	}
-	expectNoSessions(t, r.g)
+	sleepClient(t, r.client, r.gwAddr, 5)
+	sendSN(t, r.client, r.gwAddr, mqttsn.Pingreq{})
+	readAs[mqttsn.Pingresp](t, r.client) // an unknown address would get DISCONNECT instead
 }
 
 // TestShutdownWhileAsleepSendsDisconnect: gateway shutdown while asleep takes the existing path: MQTT DISCONNECT

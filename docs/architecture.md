@@ -34,7 +34,11 @@ keepalive, broker-loss handling, will handling, sleep with buffered downlink and
 - `gateway.New` binds the UDP socket; `Run` reads datagrams, decodes them and routes by sender address. A
   datagram that does not decode is logged and ignored.
 - A CONNECT from an unknown address opens a session (limited by `max_clients`). An empty client id is
-  rejected with DISCONNECT without creating a session or contacting the broker. The session goroutine dials
+  rejected with DISCONNECT without creating a session or contacting the broker.
+  A CONNECT from an address with an active session (after its CONNACK) replaces that session: the broker gets
+  MQTT DISCONNECT, so no will is published, the client gets no DISCONNECT, and a new session starts in the same
+  map slot under the gateway mutex, without the max_clients check. A CONNECT that arrived before the CONNACK is
+  ignored, as is one with an empty client id. The session goroutine dials
   the broker with a timeout, sends MQTT CONNECT, and answers CONNACK Accepted, or Congestion if anything
   failed.
 - A CONNECT with the Will flag runs the will handshake before any broker contact: WILLTOPICREQ, WILLTOPIC,
@@ -66,6 +70,9 @@ keepalive, broker-loss handling, will handling, sleep with buffered downlink and
   gets a gateway REGISTER and the PUBLISH is held (at most 20 per session) until REGACK; a rejected
   registration forgets the name so a later publish registers it again with a fresh id. Downlink QoS 1 reuses
   the broker packet id as msg id and acknowledges the broker only after the client PUBACK.
+- A downlink message whose datagram exceeds one UDP datagram (65 507 bytes) is never recorded for retransmission:
+  it is dropped and logged with sizes, a QoS 1 one is acknowledged to the broker, and an oversize REGISTER also
+  forgets its topic name. The client is not disconnected for it.
 - The table holds at most 50 names per client, with monotonic ids that are not reused until the counter wraps.
   Short subscriptions live in a separate set, also capped at 50; a broker PUBLISH whose two-character topic is
   short-subscribed is sent as a short PUBLISH without REGISTER. Topic names that are empty or contain wildcards
@@ -78,7 +85,10 @@ keepalive, broker-loss handling, will handling, sleep with buffered downlink and
   disables the pings and asks the broker for no keepalive check.
 - DISCONNECT with a duration puts the session to sleep: the broker connection stays open, the inactivity timer is
   replaced by a 1.5x sleep timer, and downlink PUBLISH messages are buffered (max 20, QoS 1 acknowledged to the
-  broker at buffering time). A client asleep past its duration is declared lost through the same will-aware
+  broker at buffering time). A DISCONNECT with a duration from an asleep or awake client is a re-sleep: it
+  replaces the duration, keeps the session and buffer, and ends a running flush (messages held for a REGISTER
+  return to the front of the buffer without a second broker PUBACK, and no PINGRESP follows). A DISCONNECT
+  without a duration, or with duration 0, ends the session. A client asleep past its duration is declared lost through the same will-aware
   teardown.
 - PINGREQ wakes a sleeping client: the buffer is flushed in order, unknown topics are registered first, and
   PINGRESP is the last datagram before the client sleeps again. CONNECT from sleep gets CONNACK immediately,
