@@ -19,8 +19,9 @@ Will-bearing connections are closed so the broker publishes their will (see [wil
 CONNECT opens a dedicated MQTT 3.1.1 connection to the broker using the MQTT-SN client id, and the client gets
 CONNACK Accepted only after the broker accepted it. If the broker is unreachable or refuses, the client gets
 CONNACK Congestion and no session state is kept. A CONNECT with the Will flag runs the will handshake before the
-broker is contacted (see [will.md](will.md)). DISCONNECT closes the broker connection and is answered with
-DISCONNECT. The CONNECT duration is the client keepalive; 0 disables supervision.
+broker is contacted (see [will.md](will.md)). DISCONNECT without a duration closes the broker connection and is
+answered with DISCONNECT; DISCONNECT with a duration puts the session to sleep instead (see [sleep.md](sleep.md)).
+The CONNECT duration is the client keepalive; 0 disables supervision.
 - Criteria:
   - CONNECT gets CONNACK Accepted; the broker sees one connection per MQTT-SN client, with that client id.
   - When the broker address is unreachable, CONNECT gets CONNACK Congestion.
@@ -42,6 +43,7 @@ disables all of this.
     packet from it gets DISCONNECT. A stored will is published by the broker (see [will.md](will.md)).
   - With keepalive 0 the client is never timed out and the gateway sends no broker PINGREQ; PINGREQ is still
     answered and publishing still works.
+  - While a client sleeps, the sleep timer replaces the active inactivity timer (see [sleep.md](sleep.md)).
 - Tests: TestClientPingGetsPingresp, TestPingreqGetsPingrespAndSessionSurvives, TestIdleClientSurvivesBrokerKeepalive, TestPeriodicPingreqKeepsClientAlive, TestSilentClientExpiresAndFreesSlot, TestSilentClientIsDisconnectedAfterInactivityLimit, TestZeroKeepaliveNeverExpires, TestZeroDurationNeverTimesOut, TestKeepaliveZeroSendsNoPingreq
 
 ### Broker connection loss
@@ -86,7 +88,6 @@ Malformed input never crashes the gateway and never gets a reply.
 
 ## Not supported
 - Discovery (SEARCHGW, GWINFO, ADVERTISE); planned.
-- Sleep; planned. DISCONNECT with a duration is treated as a full disconnect.
 - Will updates (WILLTOPICUPD, WILLMSGUPD) and will persistence across sessions; planned in later intents.
 - Gateway-originated PINGREQ towards clients: supervision is passive, based on packets the client sends.
 - Persistent (non-clean) broker sessions: CONNECT is accepted, but the broker session is always clean.

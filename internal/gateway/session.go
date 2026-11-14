@@ -41,6 +41,8 @@ type session struct {
 	// regByTopic maps each topic awaiting REGACK to that msg id. See downlink.go.
 	pendingRegs map[uint16]*pendingReg
 	regByTopic  map[string]uint16
+	// regSeq is the last creation order given to a pendingReg. See pendingReg.seq.
+	regSeq uint64
 	// pendingDownlink maps the broker packet id of each QoS 1 PUBLISH sent to the client, awaiting the
 	// client's PUBACK, to the topic id sent. The broker is acknowledged only after that PUBACK.
 	pendingDownlink map[uint16]uint16
@@ -51,6 +53,22 @@ type session struct {
 	pingOutstanding bool
 	// will is the client's will, collected by awaitWill before the broker is dialled. It is never logged.
 	will willState
+	// sleeping is set while the client sleeps after a DISCONNECT with a duration. See sleep.go.
+	sleeping bool
+	// sleepDuration is the duration the client asked for when it went to sleep. The sleep timer uses 1.5 times it.
+	sleepDuration uint16
+	// sleepBuf holds the broker PUBLISHes buffered while the client sleeps or is flushed, in arrival order.
+	sleepBuf []mqtt.Event
+	// flushing is set while the buffer is delivered after a wake. Broker PUBLISHes keep being buffered meanwhile.
+	flushing bool
+	// flushPing is set when the flush was started by PINGREQ: PINGRESP ends it and the client sleeps again. A
+	// flush started by CONNECT leaves the client active.
+	flushPing bool
+	// flushMsgID is the last gateway msg id given to a buffered QoS 1 PUBLISH; see nextFlushMsgID.
+	flushMsgID uint16
+	// preAcked holds the gateway msg ids of the QoS 1 PUBLISHes sent on wake. The broker was acknowledged when
+	// each one was buffered, so the client's PUBACK for these must not produce a second broker PUBACK.
+	preAcked map[uint16]struct{}
 }
 
 // willState is the will a client sent in the handshake. hasWill is set only once the will message arrived;
@@ -113,6 +131,7 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 	s.pendingRegs = make(map[uint16]*pendingReg)
 	s.regByTopic = make(map[string]uint16)
 	s.pendingDownlink = make(map[uint16]uint16)
+	s.preAcked = make(map[uint16]struct{})
 	if c.Will && !s.awaitWill(ctx, log) {
 		return
 	}
@@ -164,6 +183,35 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 		inactivityDue = inactivity.C
 	}
 
+	// The sleep timer is armed only while the client sleeps; a nil channel never fires. Each arm uses a new
+	// timer, so a stopped timer that already fired cannot leak an old expiry.
+	var sleep *time.Timer
+	var sleepDue <-chan time.Time
+	disarmSleep := func() {
+		if sleep != nil {
+			sleep.Stop()
+		}
+		sleepDue = nil
+	}
+	armSleep := func() {
+		disarmSleep()
+		sleep = time.NewTimer(inactivityLimit(s.sleepDuration))
+		sleepDue = sleep.C
+	}
+	defer disarmSleep()
+	// runFlush delivers the buffer after a wake. When the flush ends, a PINGREQ wake sends PINGRESP and sleeps again.
+	runFlush := func() {
+		if !s.flushing || !s.advanceFlush(log) {
+			return
+		}
+		s.flushing = false
+		if s.flushPing {
+			s.gw.sendTo(s.addr, mqttsn.Pingresp{})
+			armSleep()
+			log.Info("client asleep again")
+		}
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -202,16 +250,69 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 				inactivity.Reset(limit - idle)
 				continue
 			}
-			s.clientTimedOut(broker, log)
+			log.Warn("client silent beyond its keepalive, disconnecting")
+			s.clientTimedOut(broker)
+			return
+		case <-sleepDue:
+			log.Warn("client asleep beyond its sleep duration, disconnecting")
+			s.clientTimedOut(broker)
 			return
 		case in := <-s.inbox:
 			lastClient = in.at
+			if s.sleeping && s.ignoredWhileAsleep(in.msg, log) {
+				continue
+			}
 			switch m := in.msg.(type) {
 			case nil:
 				log.Debug("ignored unsupported packet")
 			case mqttsn.Pingreq:
-				s.gw.sendTo(s.addr, mqttsn.Pingresp{})
+				if !s.sleeping {
+					s.gw.sendTo(s.addr, mqttsn.Pingresp{})
+					break
+				}
+				if len(s.sleepBuf) == 0 {
+					s.gw.sendTo(s.addr, mqttsn.Pingresp{})
+					armSleep()
+					break
+				}
+				log.Info("client woke with PINGREQ", "buffered", len(s.sleepBuf))
+				s.flushing, s.flushPing = true, true
+				disarmSleep()
+				runFlush()
+			case mqttsn.Connect:
+				if !s.sleeping {
+					log.Debug("ignored packet", "type", m)
+					break
+				}
+				// The CONNECT duration, clean-session flag and will are ignored: the broker session is kept.
+				s.gw.sendTo(s.addr, mqttsn.Connack{ReturnCode: mqttsn.ReturnAccepted})
+				log.Info("client woke with CONNECT", "buffered", len(s.sleepBuf))
+				s.sleeping = false
+				s.flushing, s.flushPing = true, false
+				disarmSleep()
+				if limit > 0 {
+					inactivity = time.NewTimer(limit)
+					inactivityDue = inactivity.C
+				}
+				runFlush()
 			case mqttsn.Disconnect:
+				if m.HasDuration && m.Duration > 0 && !s.sleeping && !s.flushing {
+					// Sleep: the broker stays connected and the client gets its DISCONNECT as the reply.
+					s.sleeping = true
+					s.sleepDuration = m.Duration
+					if err := s.holdToSleep(broker, log); err != nil {
+						s.loseBroker(log, err)
+						return
+					}
+					if inactivity != nil {
+						inactivity.Stop()
+					}
+					inactivityDue = nil
+					armSleep()
+					s.gw.sendTo(s.addr, mqttsn.Disconnect{})
+					log.Info("client asleep", "sleep_duration", m.Duration)
+					continue
+				}
 				_ = broker.Disconnect()
 				s.gw.removeSession(s)
 				s.gw.sendTo(s.addr, mqttsn.Disconnect{})
@@ -224,6 +325,7 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 					s.loseBroker(log, err)
 					return
 				}
+				runFlush()
 			case mqttsn.Puback:
 				if err := s.handleClientPuback(broker, m, log); err != nil {
 					s.loseBroker(log, err)
@@ -321,12 +423,11 @@ func (s *session) loseBroker(log *slog.Logger, err error) {
 	s.gw.sendTo(s.addr, mqttsn.Disconnect{})
 }
 
-// clientTimedOut ends the session after the client has been silent for longer than its inactivity limit. The
-// session is removed first, so the slot is free and a retry from the client gets a fresh session. Then the
-// broker connection is ended (see endBrokerConn), and a best-effort DISCONNECT goes to the client. The caller
-// returns, which closes the broker connection.
-func (s *session) clientTimedOut(broker *mqtt.Client, log *slog.Logger) {
-	log.Warn("client silent beyond its keepalive, disconnecting")
+// clientTimedOut ends the session after the client has been silent for longer than its inactivity limit, or
+// asleep for longer than its sleep limit. The session is removed first, so the slot is free and a retry from
+// the client gets a fresh session. Then the broker connection is ended (see endBrokerConn), and a best-effort
+// DISCONNECT goes to the client. The caller returns, which closes the broker connection.
+func (s *session) clientTimedOut(broker *mqtt.Client) {
 	s.gw.removeSession(s)
 	endBrokerConn(broker, s.will.hasWill)
 	s.gw.sendTo(s.addr, mqttsn.Disconnect{})
@@ -378,6 +479,9 @@ func (s *session) handleBrokerEvent(broker *mqtt.Client, e mqtt.Event, log *slog
 	case mqtt.EventUnsuback:
 		s.handleUnsuback(e, log)
 	case mqtt.EventPublish:
+		if s.sleeping || s.flushing {
+			return s.bufferDownlink(broker, e, log)
+		}
 		return s.handleDownlink(broker, e, log)
 	case mqtt.EventPingresp:
 		s.pingOutstanding = false

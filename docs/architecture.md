@@ -1,9 +1,9 @@
 # Architecture
 
-Current state after the downlink pub/sub intent (connect, QoS 0 and QoS 1 publish in both directions,
-subscriptions with wildcards and short names, gateway topic registration, disconnect, bad-input handling,
-client timeouts, broker keepalive, broker-loss handling and will handling). Decisions: `docs/adr/` and
-`docs/branch/adr/`.
+Current state after the sleep intent (connect, QoS 0 and QoS 1 publish in both directions, subscriptions with
+wildcards and short names, gateway topic registration, disconnect, bad-input handling, client timeouts, broker
+keepalive, broker-loss handling, will handling, and sleep with buffered downlink and wake flush). Decisions:
+`docs/adr/` and `docs/branch/adr/`.
 
 ```
  MQTT-SN client --UDP--> [ router ] --inbox--> [ session goroutine ] --TCP--> MQTT broker
@@ -65,6 +65,14 @@ client timeouts, broker keepalive, broker-loss handling and will handling). Deci
 - While a session is active, the gateway keeps its broker connection alive: when half the client's CONNECT
   duration passes without a broker write, it sends an MQTT PINGREQ and expects a PINGRESP. A keepalive of 0
   disables the pings and asks the broker for no keepalive check.
+- DISCONNECT with a duration puts the session to sleep: the broker connection stays open, the inactivity timer is
+  replaced by a 1.5x sleep timer, and downlink PUBLISH messages are buffered (max 20, QoS 1 acknowledged to the
+  broker at buffering time). A client asleep past its duration is declared lost through the same will-aware
+  teardown.
+- PINGREQ wakes a sleeping client: the buffer is flushed in order, unknown topics are registered first, and
+  PINGRESP is the last datagram before the client sleeps again. CONNECT from sleep gets CONNACK immediately,
+  flushes the same way and stays active. Buffered QoS 1 messages get gateway-assigned msg ids, so the broker is
+  never acknowledged twice.
 - A client that sends no valid MQTT-SN packet for 1.5 times its CONNECT duration is declared lost: the gateway
   removes the session, sends MQTT DISCONNECT to the broker, closes it and sends a best-effort MQTT-SN
   DISCONNECT to the client. A keepalive of 0 disables this timer. PINGREQ from an active client is answered

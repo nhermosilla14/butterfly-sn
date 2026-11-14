@@ -58,7 +58,8 @@ UNSUBSCRIBE because its id stays valid for publishing.
 ### Downlink publish
 A broker PUBLISH for a topic in the client's table becomes one MQTT-SN PUBLISH with that id. An unknown topic gets
 a gateway REGISTER and the PUBLISH is held until REGACK. Downlink QoS 1 uses the broker packet id as msg id and
-acknowledges the broker only after the client PUBACK.
+acknowledges the broker only after the client PUBACK. For a sleeping client the message is buffered and QoS 1 is
+acknowledged at buffering time instead (see [sleep.md](sleep.md)).
 - Criteria:
   - A known topic arrives with its table id and payload, with no REGISTER.
   - An unknown topic arrives only after REGISTER; a second message for the same topic joins the same hold.
@@ -87,7 +88,6 @@ Short subscriptions live in a separate set capped at 50 names.
 - Tests: TestShortPublishReachesBrokerLikeNormalPublish, TestShortPublishReachesBrokerOnTwoCharName, TestShortPublishWithZeroByteDroppedWithoutBrokerContact, TestShortPublishWithWildcardNameDroppedThenValidWorks, TestShortSubscribeReportsTwoBytesWithoutTableSlot, TestShortSubscribeDeliversShortPublishWithoutRegister, TestShortSubscribeWrongLengthGetsCongestion, TestShortSubscribeCapCongestionWithoutBrokerContact, TestShortUnsubscribeStopsShortDownlink, TestShortUnsubscribeInvalidLengthAcknowledgedWithoutBrokerContact, TestDownlinkShortSubscriptionSendsShortPublishWithoutRegister, TestDownlinkOneCharTopicWithWildcardRegisters, TestDownlinkOneCharTopicOnWildcardRegistersFirst, TestDownlinkTwoCharNormalSubscriptionUsesTableID, TestShortSubscribeBrokerRefusalNotTracked, TestTrackedShortNamesCountsTrackedAndPending, TestIsPublishableName
 
 ## Not supported
-- Sleep buffering and delivery to asleep clients; next intent.
 - Retransmission of REGISTER and PUBLISH towards the client, and DUP handling; later intent.
 - Predefined topic ids (project non-goal).
 - QoS 2 and broker TLS or authentication.
