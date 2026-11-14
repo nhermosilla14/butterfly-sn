@@ -1,9 +1,10 @@
 # Walking skeleton: connect, publish and disconnect
 
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-13
 - Owner: Nicolás Hermosilla
+- Approved by: Nicolás Hermosilla
 
 ## Goal
 An MQTT-SN client over UDP can connect through the gateway to a plain MQTT broker, publish messages at QoS 0
@@ -50,6 +51,6 @@ Sources: `olddocs/behavior/session-lifecycle.md`, `olddocs/behavior/pubsub-topic
 - Broker connection drops mid-session (separate intent).
 - QoS 2, TLS and authentication to the broker.
 
-## Open questions
-- Should the skeleton already accept CleanSession=0, or reject it until sessions are persisted? Proposed: accept the flag, treat as clean in this intent, and fix in the sleep intent.
-- Minimal config keys proposed: `listen` (udp host:port), `broker` (host:port), `max_clients`, `log_level`. OK?
+## Decisions taken
+- CleanSession=0 is accepted and treated as clean in this intent; real handling comes with the sleep intent.
+- Minimal config keys: `listen` (UDP host:port), `broker` (host:port), `max_clients`, `log_level`.
