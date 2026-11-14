@@ -1,8 +1,9 @@
 # Session liveness: keepalive, timeouts and broker-drop handling
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-14
 - Owner: Nicolás Hermosilla
+- Approved by: Nicolás Hermosilla
 - Depends on: none
 
 ## Goal
@@ -12,7 +13,8 @@ believing it is connected. After any of those endings the session is removed and
 
 ## Acceptance criteria
 - An active client that sends no MQTT-SN packet for longer than 1.5 times the keepalive from its CONNECT is
-  considered lost: the gateway ends the session, closes its broker connection and frees its client slot.
+  considered lost: the gateway sends it a best-effort DISCONNECT, ends the session, closes its broker
+  connection and frees its client slot.
 - The client limit counts live sessions only. With `max_clients` reached, a new CONNECT is refused with
   CONNACK Congestion; once a session ends by timeout or broker loss, a new CONNECT is accepted.
 - PINGREQ from an active client is answered with PINGRESP, and counts as activity for its inactivity timer.
@@ -39,12 +41,10 @@ believing it is connected. After any of those endings the session is removed and
 - Reconnection, session resumption or broker takeover for the same client id.
 - Subscriptions and downlink, discovery, QoS 2, TLS and broker authentication.
 
-## Open questions
-- On client timeout, should the gateway send a best-effort MQTT-SN DISCONNECT to the silent client before
-  dropping the session? The spec allows an unsolicited DISCONNECT; the legacy gateway sent nothing.
-  Recommended: send it.
-- Should the gateway also originate PINGREQ to idle clients to probe them, as the spec permits, or only enforce
-  inactivity passively? Recommended: passive enforcement only, since the keepalive rule is based on not receiving
-  anything from the client.
-- Is pinging the broker at half the client keepalive, with no new configuration key, acceptable? Recommended: yes;
-  keepalive 0 means no pings.
+## Decisions taken
+- On client timeout, the gateway sends a best-effort MQTT-SN DISCONNECT before dropping the session. The spec
+  allows an unsolicited DISCONNECT, and the legacy gateway's silence is not worth keeping.
+- Keepalive is enforced passively: the gateway never originates PINGREQ to an active client, because the rule is
+  based on not receiving anything from it. It answers client PINGREQ with PINGRESP.
+- The gateway pings the broker at half the client's keepalive, derived from CONNECT, with no new configuration
+  key. Keepalive 0 means no pings.
