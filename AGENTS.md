@@ -39,7 +39,7 @@ patched Eclipse Paho MQTT-SN gateway (C++), replaced to get a maintainable, robu
 Go implementation. Never copy code from the Paho sources (EPL/EDL) into this repo.
 
 ## Conventions
-- Tooling: Go (`go test ./...`, `gofmt`, `go vet`); build and CI helpers are decided in ADRs and
+- Tooling: Go (`go test ./...`, `gofmt`, `go vet`); e2e tests need Docker (testcontainers-go); build and CI helpers are decided in ADRs and
   recorded here when they exist.
 - Git workflow: git-flow (skill `git-flow-workflow`). Integration branch: `develop`; `main` holds releases.
 - Workflow: branch names `feature/<short-title>` or `fix/<short-title>` from `develop`; imperative commit subjects.

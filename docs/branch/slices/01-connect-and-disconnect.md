@@ -1,6 +1,6 @@
 # Connect and disconnect through the gateway
 
-- Status: In progress
+- Status: Done
 - Intents: 20261113-walking-skeleton
 - ADRs: 20261113-package-layout-and-session-concurrency, 20261113-own-minimal-mqtt-client, 20261113-yaml-configuration, 20261113-end-to-end-testing-with-real-broker
 
