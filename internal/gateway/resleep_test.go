@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -135,4 +136,35 @@ func TestResleepDuringConnectWakeFlushReturnsToSleep(t *testing.T) {
 	expectPublish(t, r.client, "held")
 	readAs[mqttsn.Pingresp](t, r.client)
 	r.expectNoBrokerPacket()
+}
+
+// TestResleepCapDropsNewestWhenHeldReturns: a full buffer, one message taken out for a REGISTER that is still
+// waiting, and a new broker PUBLISH buffered during the wait. A re-sleep puts the held message back at the front,
+// one over the cap of 20, so the newest message is dropped. The next wake delivers the rest in order.
+func TestResleepCapDropsNewestWhenHeldReturns(t *testing.T) {
+	r := startSubRigTuned(t, 60, retryTune(time.Minute, 2))
+	const known = "gw/resleep/cap-known"
+	r.subscribeExact(1, known, 0)
+	sleepClient(t, r.client, r.gwAddr, 60)
+
+	const unknown = "gw/resleep/cap-unknown"
+	r.brokerSend(brokerPublish(0x00, unknown, 0, []byte("held")))
+	for i := 1; i < maxSleepBuffer; i++ {
+		r.brokerSend(brokerPublish(0x00, known, 0, []byte("k"+strconv.Itoa(i))))
+	}
+	expectSilence(t, r.client)
+
+	wakePing(r)
+	readAs[mqttsn.Register](t, r.client) // unanswered
+	r.brokerSend(brokerPublish(0x00, known, 0, []byte("newest")))
+
+	sleepClient(t, r.client, r.gwAddr, 60)
+	wakePing(r)
+	reg := readAs[mqttsn.Register](t, r.client)
+	sendSN(t, r.client, r.gwAddr, mqttsn.Regack{TopicID: reg.TopicID, MsgID: reg.MsgID, ReturnCode: mqttsn.ReturnAccepted})
+	expectPublish(t, r.client, "held")
+	for i := 1; i < maxSleepBuffer; i++ {
+		expectPublish(t, r.client, "k"+strconv.Itoa(i))
+	}
+	readAs[mqttsn.Pingresp](t, r.client) // "newest" was dropped, so nothing comes before PINGRESP
 }
