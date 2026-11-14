@@ -9,6 +9,7 @@ import (
 
 const (
 	typePublish    = 3
+	typePuback     = 4
 	typeSubscribe  = 8
 	typeSuback     = 9
 	typeConnect    = 1
@@ -16,6 +17,8 @@ const (
 	typeDisconnect = 14
 
 	flagRetain    = 0x01
+	flagDUP       = 0x08
+	qos1Flag      = 0x02 // PUBLISH flags bit 1 set: QoS 1
 	flagSubscribe = 0x02 // fixed header flags of SUBSCRIBE are reserved and must be 0b0010
 )
 

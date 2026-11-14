@@ -25,6 +25,9 @@ func TestRoundTrip(t *testing.T) {
 		Publish{QoS: 3, TopicIDType: TopicIDPredefined, TopicID: 3, MsgID: 0},
 		Publish{QoS: 0, TopicID: 5, Data: allBytes()},
 		Publish{QoS: 0, TopicID: 5},
+		Publish{QoS: 1, TopicID: 0xFFFE, MsgID: 0xBEEF, Data: []byte("q1")},
+		Puback{TopicID: 0xFFFE, MsgID: 0xBEEF, ReturnCode: ReturnAccepted},
+		Puback{TopicID: 1, MsgID: 1, ReturnCode: ReturnInvalidTopicID},
 	}
 	for _, m := range cases {
 		b, err := Encode(m)
@@ -87,6 +90,13 @@ func TestPublishFlagsEncoding(t *testing.T) {
 	want := []byte{7, 0x0C, 0x80 | 2<<5 | 0x10 | 0x02, 0x01, 0x02, 0x03, 0x04}
 	if !bytes.Equal(b, want) {
 		t.Fatalf("got % x, want % x", b, want)
+	}
+}
+
+func TestPubackEncodeBytes(t *testing.T) {
+	b, _ := Encode(Puback{TopicID: 0x0102, MsgID: 0x0304, ReturnCode: ReturnAccepted})
+	if !bytes.Equal(b, []byte{7, 0x0D, 0x01, 0x02, 0x03, 0x04, 0}) {
+		t.Fatalf("PUBACK got % x", b)
 	}
 }
 
@@ -168,6 +178,9 @@ func TestDecodeErrors(t *testing.T) {
 		"regack long":                  {0x08, 0x0B, 0, 1, 0, 1, 0, 0},
 		"publish short":                {0x06, 0x0C, 0, 1, 0, 1},
 		"publish no body":              {0x02, 0x0C},
+		"puback short":                 {0x06, 0x0D, 0, 1, 0, 1},
+		"puback long":                  {0x08, 0x0D, 0, 1, 0, 1, 0, 0},
+		"puback no body":               {0x02, 0x0D},
 	}
 	for name, b := range cases {
 		if _, err := Decode(b); !errors.Is(err, ErrMalformed) {
@@ -187,7 +200,7 @@ func FuzzDecode(f *testing.F) {
 	for _, m := range []Message{
 		Connect{ClientID: "a"}, Connack{}, Disconnect{Duration: 1, HasDuration: true},
 		Register{TopicID: 0, MsgID: 1, TopicName: "a/b"}, Regack{TopicID: 1, MsgID: 1},
-		Publish{QoS: 1, TopicID: 1, MsgID: 2, Data: []byte("x")},
+		Publish{QoS: 1, TopicID: 1, MsgID: 2, Data: []byte("x")}, Puback{TopicID: 1, MsgID: 2},
 	} {
 		b, _ := Encode(m)
 		f.Add(b)

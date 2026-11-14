@@ -43,6 +43,49 @@ func (c *Client) Publish(topic string, payload []byte, retain bool) error {
 	return c.write(pkt)
 }
 
+// PublishQoS1 sends a QoS 1 PUBLISH with packet identifier id, which must not be 0. dup sets the DUP flag.
+// It returns once the bytes are written; the broker's PUBACK arrives later and is read with ReadPuback.
+// The caller chooses id and keeps track of which ids are outstanding.
+func (c *Client) PublishQoS1(topic string, payload []byte, retain, dup bool, id uint16) error {
+	if topic == "" || strings.ContainsAny(topic, "+#") {
+		return ErrInvalidTopic
+	}
+	if id == 0 {
+		return fmt.Errorf("%w: packet identifier 0", ErrMalformedPacket)
+	}
+	body, err := appendString(nil, topic)
+	if err != nil {
+		return err
+	}
+	body = append(body, byte(id>>8), byte(id))
+	body = append(body, payload...)
+	flags := byte(qos1Flag)
+	if retain {
+		flags |= flagRetain
+	}
+	if dup {
+		flags |= flagDUP
+	}
+	pkt, err := packet(typePublish, flags, body)
+	if err != nil {
+		return err
+	}
+	return c.write(pkt)
+}
+
+// ReadPuback waits for the next PUBACK from the broker and returns its packet identifier, bounded by ctx.
+// Any other packet is an error. It must not run concurrently with ReadPublish or Subscribe.
+func (c *Client) ReadPuback(ctx context.Context) (uint16, error) {
+	p, err := c.readPacket(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if p.Type != typePuback || p.Flags != 0 || len(p.Body) != 2 {
+		return 0, fmt.Errorf("%w: expected PUBACK, got packet type %d", ErrMalformedPacket, p.Type)
+	}
+	return uint16(p.Body[0])<<8 | uint16(p.Body[1]), nil
+}
+
 // Subscribe subscribes to filter at QoS 0 and waits for its SUBACK, bounded by ctx. It is meant for
 // observers that read deliveries with ReadPublish. Subscribe and ReadPublish must not run concurrently.
 func (c *Client) Subscribe(ctx context.Context, filter string) error {

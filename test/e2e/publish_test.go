@@ -53,6 +53,35 @@ func TestPublishQoS0ReachesBroker(t *testing.T) {
 	}
 }
 
+// TestPublishQoS1AcknowledgedAfterBrokerAcceptance checks the PUBACK carries the client's msg id and topic id.
+// Ordering (PUBACK only after the broker's PUBACK) is covered by internal/gateway TestQoS1PubackWaitsForBrokerPuback.
+func TestPublishQoS1AcknowledgedAfterBrokerAcceptance(t *testing.T) {
+	b := startBroker(t)
+	gw := startGateway(t, b.addr)
+	const topic = "e2e/publish/qos1"
+	obs := newObserver(t, b.addr, "e2e-qos1-obs", topic)
+	c := newSNClient(t, gw.addr)
+	connect(t, c, "e2e-pub-qos1")
+
+	reg := c.register(1, topic)
+	if reg.ReturnCode != mqttsn.ReturnAccepted {
+		t.Fatalf("REGACK return code %d, want accepted", reg.ReturnCode)
+	}
+	const msgID = 0xBEEF
+	payload := allByteValues()
+	c.send(mqttsn.Publish{QoS: 1, TopicIDType: mqttsn.TopicIDNormal, TopicID: reg.TopicID, MsgID: msgID, Data: payload})
+
+	m := obs.next()
+	if m.Topic != topic || m.Retain || !bytes.Equal(m.Payload, payload) {
+		t.Fatalf("broker got topic %q retain %v payload of %d bytes; want topic %q, payload of %d bytes",
+			m.Topic, m.Retain, len(m.Payload), topic, len(payload))
+	}
+	ack := expect[mqttsn.Puback](t, c, waitLong)
+	if ack.MsgID != msgID || ack.TopicID != reg.TopicID || ack.ReturnCode != mqttsn.ReturnAccepted {
+		t.Fatalf("PUBACK %+v, want msg id %#x, topic id %#x, accepted", ack, msgID, reg.TopicID)
+	}
+}
+
 // TestPublishQoS0UnknownTopicIDDropped checks that nothing reaches the broker for an unknown id. The
 // observer subscribes to a wildcard that covers the sentinel topic, so the sentinel must be the first
 // delivery. The REGACK that follows shows the gateway sent no PUBACK for the QoS 0 publishes.

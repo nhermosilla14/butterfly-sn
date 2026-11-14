@@ -12,6 +12,7 @@ const (
 	msgRegister   = 0x0A
 	msgRegack     = 0x0B
 	msgPublish    = 0x0C
+	msgPuback     = 0x0D
 	msgDisconnect = 0x18
 
 	protocolID = 0x01
@@ -48,7 +49,7 @@ var (
 	ErrUnsupported = errors.New("mqttsn: unsupported message type")
 )
 
-// Message is one decoded MQTT-SN message: Connect, Connack, Register, Regack, Publish or Disconnect.
+// Message is one decoded MQTT-SN message: Connect, Connack, Register, Regack, Publish, Puback or Disconnect.
 type Message interface {
 	isMessage()
 }
@@ -92,6 +93,13 @@ type Publish struct {
 	Data        []byte
 }
 
+// Puback is a PUBACK message answering a QoS 1 Publish with the same TopicID and MsgID.
+type Puback struct {
+	TopicID    uint16
+	MsgID      uint16
+	ReturnCode byte
+}
+
 // Disconnect is a DISCONNECT message. Duration is present only when HasDuration is set (sleep request).
 type Disconnect struct {
 	Duration    uint16
@@ -103,6 +111,7 @@ func (Connack) isMessage()    {}
 func (Register) isMessage()   {}
 func (Regack) isMessage()     {}
 func (Publish) isMessage()    {}
+func (Puback) isMessage()     {}
 func (Disconnect) isMessage() {}
 
 // Encode serialises m with its length header.
@@ -147,6 +156,9 @@ func Encode(m Message) ([]byte, error) {
 		}
 		body = []byte{flags, byte(m.TopicID >> 8), byte(m.TopicID), byte(m.MsgID >> 8), byte(m.MsgID)}
 		body = append(body, m.Data...)
+	case Puback:
+		typ = msgPuback
+		body = []byte{byte(m.TopicID >> 8), byte(m.TopicID), byte(m.MsgID >> 8), byte(m.MsgID), m.ReturnCode}
 	case Disconnect:
 		typ = msgDisconnect
 		if m.HasDuration {
@@ -235,6 +247,15 @@ func Decode(data []byte) (Message, error) {
 			TopicID:     uint16(body[1])<<8 | uint16(body[2]),
 			MsgID:       uint16(body[3])<<8 | uint16(body[4]),
 			Data:        append([]byte(nil), body[5:]...),
+		}, nil
+	case msgPuback:
+		if len(body) != 5 {
+			return nil, ErrMalformed
+		}
+		return Puback{
+			TopicID:    uint16(body[0])<<8 | uint16(body[1]),
+			MsgID:      uint16(body[2])<<8 | uint16(body[3]),
+			ReturnCode: body[4],
 		}, nil
 	case msgDisconnect:
 		switch len(body) {

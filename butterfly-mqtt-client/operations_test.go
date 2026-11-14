@@ -154,3 +154,106 @@ func TestReadPublishTimesOut(t *testing.T) {
 		t.Fatal("no error on silent broker")
 	}
 }
+
+func TestPublishQoS1EncodesPacket(t *testing.T) {
+	got := make(chan Packet, 1)
+	c := serve(t, func(srv net.Conn) {
+		p, err := ReadPacket(srv)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		got <- p
+	})
+	payload := []byte{0, 0xFF, '\r', '\n', 0x80}
+	if err := c.PublishQoS1("a/b", payload, true, true, 0xBEEF); err != nil {
+		t.Fatal(err)
+	}
+	p := <-got
+	want := append([]byte{0, 3, 'a', '/', 'b', 0xBE, 0xEF}, payload...)
+	if p.Type != typePublish || p.Flags != 0x08|0x02|0x01 || !bytes.Equal(p.Body, want) {
+		t.Fatalf("PUBLISH: type %d flags %#x body % x", p.Type, p.Flags, p.Body)
+	}
+}
+
+func TestPublishQoS1PlainFlags(t *testing.T) {
+	got := make(chan Packet, 1)
+	c := serve(t, func(srv net.Conn) {
+		p, _ := ReadPacket(srv)
+		got <- p
+	})
+	if err := c.PublishQoS1("t", nil, false, false, 1); err != nil {
+		t.Fatal(err)
+	}
+	if p := <-got; p.Flags != 0x02 || !bytes.Equal(p.Body, []byte{0, 1, 't', 0, 1}) {
+		t.Fatalf("PUBLISH: flags %#x body % x", p.Flags, p.Body)
+	}
+}
+
+func TestPublishQoS1RejectsInvalid(t *testing.T) {
+	c := &Client{}
+	if err := c.PublishQoS1("a/#", nil, false, false, 1); !errors.Is(err, ErrInvalidTopic) {
+		t.Errorf("wildcard topic: got %v, want ErrInvalidTopic", err)
+	}
+	if err := c.PublishQoS1("a", nil, false, false, 0); !errors.Is(err, ErrMalformedPacket) {
+		t.Errorf("packet id 0: got %v, want ErrMalformedPacket", err)
+	}
+}
+
+// TestPublishQoS1WriteError checks that a broken connection is reported, not swallowed.
+func TestPublishQoS1WriteError(t *testing.T) {
+	c := serve(t, func(srv net.Conn) {})
+	_ = c.conn.Close()
+	if err := c.PublishQoS1("a", []byte("x"), false, false, 1); err == nil {
+		t.Fatal("no error writing to closed connection")
+	}
+}
+
+func TestReadPubackReturnsIDAfterBrokerAck(t *testing.T) {
+	published := make(chan struct{})
+	c := serve(t, func(srv net.Conn) {
+		_, _ = ReadPacket(srv)
+		close(published)
+		ack, _ := packet(typePuback, 0, []byte{0x12, 0x34})
+		_, _ = srv.Write(ack)
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := c.PublishQoS1("a", nil, false, false, 0x1234); err != nil {
+		t.Fatal(err)
+	}
+	<-published
+	id, err := c.ReadPuback(ctx)
+	if err != nil || id != 0x1234 {
+		t.Fatalf("ReadPuback: id %#x, %v; want 0x1234", id, err)
+	}
+}
+
+func TestReadPubackMalformed(t *testing.T) {
+	cases := map[string][]byte{
+		"wrong type": {0x30, 0x02, 0, 1},
+		"bad flags":  {0x41, 0x02, 0, 1},
+		"short body": {0x40, 0x01, 0},
+		"long body":  {0x40, 0x03, 0, 1, 0},
+	}
+	for name, raw := range cases {
+		c := serve(t, func(srv net.Conn) {
+			_, _ = srv.Write(raw)
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_, err := c.ReadPuback(ctx)
+		cancel()
+		if !errors.Is(err, ErrMalformedPacket) {
+			t.Errorf("%s: got %v, want ErrMalformedPacket", name, err)
+		}
+	}
+}
+
+func TestReadPubackCancelled(t *testing.T) {
+	c := serve(t, func(srv net.Conn) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := c.ReadPuback(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v, want context.Canceled", err)
+	}
+}

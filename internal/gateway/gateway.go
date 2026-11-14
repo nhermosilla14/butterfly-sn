@@ -4,6 +4,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -73,10 +74,11 @@ func (g *Gateway) Run(ctx context.Context) error {
 	}
 }
 
+// route handles one datagram. A valid packet of a type not implemented yet has msg nil and err ErrUnsupported.
 func (g *Gateway) route(ctx context.Context, data []byte, addr *net.UDPAddr) {
 	msg, err := mqttsn.Decode(data)
-	if err != nil {
-		g.log.Debug("ignored datagram", "from", addr, "error", err)
+	if err != nil && !errors.Is(err, mqttsn.ErrUnsupported) {
+		g.log.Debug("ignored malformed datagram", "from", addr, "error", err)
 		return
 	}
 	key := addr.String()
@@ -89,19 +91,29 @@ func (g *Gateway) route(ctx context.Context, data []byte, addr *net.UDPAddr) {
 		return
 	}
 	g.mu.Unlock()
+	if msg == nil {
+		g.log.Debug("ignored unsupported packet", "from", addr)
+		return
+	}
 	s.deliver(msg)
 }
 
-// openSessionLocked starts a session for a CONNECT from an unknown sender. Other packets from
-// unknown senders are ignored. The caller holds g.mu.
+// openSessionLocked starts a session for a CONNECT from an unknown sender. Any other packet from an
+// unknown sender gets DISCONNECT, except DISCONNECT itself, which is ignored. The caller holds g.mu.
 func (g *Gateway) openSessionLocked(ctx context.Context, key string, addr *net.UDPAddr, msg mqttsn.Message) {
 	c, ok := msg.(mqttsn.Connect)
 	if !ok {
-		g.log.Debug("ignored packet from unknown sender", "from", addr, "type", fmt.Sprintf("%T", msg))
+		if _, isDisconnect := msg.(mqttsn.Disconnect); isDisconnect {
+			g.log.Debug("ignored DISCONNECT from unknown sender", "from", addr)
+			return
+		}
+		g.log.Debug("packet from unknown sender, sending DISCONNECT", "from", addr, "type", fmt.Sprintf("%T", msg))
+		g.sendTo(addr, mqttsn.Disconnect{})
 		return
 	}
 	if c.ClientID == "" {
-		g.log.Warn("CONNECT with empty client id ignored", "from", addr)
+		g.log.Warn("CONNECT with empty client id rejected", "from", addr)
+		g.sendTo(addr, mqttsn.Disconnect{})
 		return
 	}
 	if len(g.sessions) >= g.cfg.MaxClients {
