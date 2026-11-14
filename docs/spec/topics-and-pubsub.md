@@ -73,6 +73,22 @@ acknowledged at buffering time instead (see [sleep.md](sleep.md)).
     client PUBACK ids are ignored.
 - Tests: TestDownlinkSubscribedTopicDeliveredWithoutRegister, TestDownlinkKnownTopicForwardedWithoutRegister, TestDownlinkWildcardUnregisteredTopicRegistersFirst, TestDownlinkUnknownTopicRegistersThenReleasesOnAccept, TestDownlinkQoS1AcknowledgedByClientAndFlowContinues, TestDownlinkQoS1BrokerPubackAfterClientPuback, TestDownlinkRegackRejectedDropsAndAcksQoS1, TestDownlinkRejectedRegistrationForgetsNameAndRegistersAgain, TestDownlinkSecondPublishJoinsPendingRegistration, TestDownlinkHoldFullDropsAndAcksQoS1, TestDownlinkTableFullDropsAndAcksQoS1, TestDownlinkFullTableDropsNewTopicWithoutRegister, TestDownlinkDuplicateQoS1IDDroppedWithoutSecondAck, TestDownlinkPendingFullAcksBrokerWithoutSending, TestDownlinkUnknownRegackAndPubackIgnored, TestDownlinkBrokerAckWriteFailureIsError
 
+### Downlink retransmission
+A gateway REGISTER or downlink QoS 1 PUBLISH the client does not answer is sent again every `retry_interval`
+seconds, up to `retry_limit` times: the same datagram, with DUP set on a PUBLISH. MQTT-SN 1.2 defines this retry
+procedure for clients only (6.13) and gives no gateway rule, so the gateway applies the same Tretry and Nretry
+logic and, once the limit is used up, treats the client as lost: it gets DISCONNECT, the session ends, a stored
+will is published by the broker, and held messages and the topic name are discarded with the session. Nothing is
+acknowledged to the broker in that teardown. Any REGACK, or the client PUBACK, ends the retries. Retries are
+logged with client id, message type and attempt, never payloads or topic names.
+- Criteria:
+  - A silent client sees the REGISTER repeated, then DISCONNECT; the slot is free and a will is published.
+  - A client that answers a retransmitted REGISTER gets the held PUBLISH and no further retries; a REGACK in the
+    last interval stops the sequence; a rejected REGACK also stops it.
+  - A QoS 1 PUBLISH is repeated with the same msg id and DUP until the client's PUBACK, which produces one broker
+    PUBACK; exhausting the retries gives DISCONNECT and no broker PUBACK.
+- Tests: TestRetrySilentClientRegisterRepeatedThenDisconnect, TestRetryClientAnsweringSecondRegisterGetsHeldPublish, TestRetryRegackDuringLastIntervalStopsSequence, TestRetryRejectedRegackRemovesEntry, TestRetryQoS1PublishRepeatedWithDupUntilPuback, TestRetryQoS1GiveUpDisconnectsWithoutBrokerPuback
+
 ### Short topic names
 A short topic name is exactly two characters, carried in the topic id field. It works in PUBLISH, SUBSCRIBE and
 UNSUBSCRIBE, and a downlink message for an exact short subscription is sent as a short PUBLISH without REGISTER.
@@ -88,7 +104,7 @@ Short subscriptions live in a separate set capped at 50 names.
 - Tests: TestShortPublishReachesBrokerLikeNormalPublish, TestShortPublishReachesBrokerOnTwoCharName, TestShortPublishWithZeroByteDroppedWithoutBrokerContact, TestShortPublishWithWildcardNameDroppedThenValidWorks, TestShortSubscribeReportsTwoBytesWithoutTableSlot, TestShortSubscribeDeliversShortPublishWithoutRegister, TestShortSubscribeWrongLengthGetsCongestion, TestShortSubscribeCapCongestionWithoutBrokerContact, TestShortUnsubscribeStopsShortDownlink, TestShortUnsubscribeInvalidLengthAcknowledgedWithoutBrokerContact, TestDownlinkShortSubscriptionSendsShortPublishWithoutRegister, TestDownlinkOneCharTopicWithWildcardRegisters, TestDownlinkOneCharTopicOnWildcardRegistersFirst, TestDownlinkTwoCharNormalSubscriptionUsesTableID, TestShortSubscribeBrokerRefusalNotTracked, TestTrackedShortNamesCountsTrackedAndPending, TestIsPublishableName
 
 ## Not supported
-- Retransmission of REGISTER and PUBLISH towards the client, and DUP handling; later intent.
+- DUP handling of retransmitted client PUBLISH: the client owns the uplink retry.
 - Predefined topic ids (project non-goal).
 - QoS 2 and broker TLS or authentication.
 - Gateway-side message deduplication: a broker retransmission may be delivered again.

@@ -46,10 +46,15 @@ their PUBLISH. Buffered QoS 1 messages use gateway-assigned msg ids and are not 
     after the flush; the pre-acknowledged set is capped at 20.
   - An active QoS 1 message whose broker packet id collides with a pre-acknowledged id is dropped and acknowledged
     to the broker instead of duplicating a client msg id.
-- Tests: TestWakeEmptyPingreqGetsPingrespAndStaysAsleep, TestWakeFlushesQoS0InOrderThenPingresp, TestWakeUnknownTopicRegistersBeforePingresp, TestWakeRejectedRegackDropsBufferedAndFinishes, TestWakeDuringFlushDeliveredAfterBufferedBeforePingresp, TestWakeConnectFlushesAndStaysActive, TestWakeConnectRearmsInactivityWithOriginalDuration, TestWakeRestartsSleepTimerAfterPingreq, TestWakeQoS1GetsGatewayMsgIDAndNoSecondBrokerPuback, TestWakeDuplicateBrokerIDGetsDistinctMsgIDs, TestWakePreAckedCapDropsFurtherQoS1, TestActiveQoS1WithPreAckedIDIsDropped, TestWakePingreqFlushesInOrderThenPingresp, TestWakeWildcardUnregisteredTopicRegistersBeforePingresp, TestWakeConnectFlushesThenDeliversLive
+  - A REGISTER or PUBLISH of the flush follows the retry rule of [topics-and-pubsub.md](topics-and-pubsub.md): a
+    missing REGACK or PUBACK ends in DISCONNECT instead of waiting, and a sleeping client is never retransmitted
+    to. A QoS 1 PUBLISH still unacknowledged when the client sleeps is not resent while it sleeps and is
+    supervised again, with fresh retries, from the wake-up.
+- Tests: TestRetryFlushMissingRegackEndsWithDisconnect, TestRetrySleepingClientNotRetransmittedOrTimedOut, TestRetrySleepParkedQoS1ResentWithDupAfterWake, TestRetrySleepParkedQoS1SilentAfterWakeDisconnects, TestWakeEmptyPingreqGetsPingrespAndStaysAsleep, TestWakeFlushesQoS0InOrderThenPingresp, TestWakeUnknownTopicRegistersBeforePingresp, TestWakeRejectedRegackDropsBufferedAndFinishes, TestWakeDuringFlushDeliveredAfterBufferedBeforePingresp, TestWakeConnectFlushesAndStaysActive, TestWakeConnectRearmsInactivityWithOriginalDuration, TestWakeRestartsSleepTimerAfterPingreq, TestWakeQoS1GetsGatewayMsgIDAndNoSecondBrokerPuback, TestWakeDuplicateBrokerIDGetsDistinctMsgIDs, TestWakePreAckedCapDropsFurtherQoS1, TestActiveQoS1WithPreAckedIDIsDropped, TestWakePingreqFlushesInOrderThenPingresp, TestWakeWildcardUnregisteredTopicRegistersBeforePingresp, TestWakeConnectFlushesThenDeliversLive
 
 ## Not supported
-- Retransmission of REGISTER, PUBLISH or PINGREQ: a missing REGACK keeps the flush waiting until the session
-  ends; a later intent adds timers.
+- Retransmission of PINGREQ towards the client.
+- Retry supervision of a flushed QoS 1 PUBLISH that the broker already acknowledged and the client has not
+  acknowledged when it goes back to sleep: it is dropped from supervision.
 - Persistent sessions (CleanSession=0), will persistence and session resumption across gateways.
 - Queue ageing, byte-size limits, multiple sleep durations and will updates.

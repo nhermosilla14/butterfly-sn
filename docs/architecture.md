@@ -1,8 +1,8 @@
 # Architecture
 
-Current state after the delivery intent (connect, QoS 0 and QoS 1 publish in both directions, subscriptions with
+Current state after the broker outage intent (connect, QoS 0 and QoS 1 publish in both directions, subscriptions with
 wildcards and short names, gateway topic registration, disconnect, bad-input handling, client timeouts, broker
-keepalive, broker-loss handling, will handling, sleep with buffered downlink and wake flush, gateway discovery, and release builds with a container image). Decisions:
+keepalive, broker-loss handling, will handling, sleep with buffered downlink and wake flush, gateway discovery, retransmission and bounded waits, and release builds with a container image). Decisions:
 `docs/adr/` and `docs/branch/adr/`.
 
 ```
