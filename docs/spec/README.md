@@ -1,5 +1,10 @@
 # Spec index
 
-One file per functional area describing delivered behaviour. Empty until the first branch is merged.
+One file per functional area describing delivered behaviour, with the tests that prove it.
 
-Planned areas: transport and sessions, will, sleep, topics and pub/sub, discovery, configuration and operations.
+- [transport-and-sessions.md](transport-and-sessions.md): startup and shutdown, connect and disconnect, client
+  identity, unknown senders, malformed datagrams.
+- [topics-and-pubsub.md](topics-and-pubsub.md): topic registration, QoS 0 and QoS 1 publish towards the broker.
+- [configuration.md](configuration.md): YAML configuration keys, defaults and validation.
+
+Planned areas: will, sleep, discovery and operations.

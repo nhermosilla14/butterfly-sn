@@ -30,11 +30,11 @@ delete the `replace` line. `internal/mqttsn` stays internal for now.
 Concurrency: one goroutine reads the UDP socket and routes each datagram, by sender address, to the inbox
 channel of that client's session. Each session runs one goroutine that owns all its state (state, topic table,
 message ids) and processes its inbox, so session state needs no locks. Each session also owns the broker TCP
-connection with a reader goroutine that feeds events into the same inbox. Blocking work (dialing the broker)
+connection with a reader goroutine that feeds broker events into the same serialized session stream. Blocking work (dialing the broker)
 happens with a timeout inside the session goroutine, so one slow broker connect only delays that client.
 Outbound UDP writes go through the shared socket. A `context.Context` cancels everything on shutdown. A
-packet from an unknown sender is handled by the router (CONNECT creates the session, anything else gets
-DISCONNECT).
+packet from an unknown sender is handled by the router (CONNECT creates the session, anything else except
+DISCONNECT gets DISCONNECT).
 
 ## Alternatives considered
 - Global event queues and worker pool, as in the old gateway — shared state needs locks and one blocked worker stalls all clients.

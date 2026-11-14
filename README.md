@@ -20,6 +20,11 @@ cp config.example.yaml config.yaml   # edit listen and broker
 ## Usage
 Flag `-config <file>` (required). Configuration keys (`listen`, `broker`, `max_clients`, `log_level`) are documented in `config.example.yaml`. Stop with SIGINT or SIGTERM.
 
+## Manual compatibility check
+The automated suite uses its own MQTT-SN helper. For a manual check with a third-party client, run the gateway
+and point `mqtt-sn-pub` (or `mqtt-sn-sub`) from `mqtt-sn-tools` at its UDP port. This is not part of the
+automated tests.
+
 ## Project structure
 ```
 cmd/, internal/               the gateway

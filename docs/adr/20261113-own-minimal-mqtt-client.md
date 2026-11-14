@@ -15,9 +15,9 @@ pull in dependencies.
 
 ## Decision
 The broker side speaks MQTT 3.1.1 only; MQTT 5 is not planned. Implement a small MQTT 3.1.1 packet codec and connection as the standalone module `butterfly-mqtt-client/` (not under `internal/`, so it can later move to its own repository; see the package layout ADR), standard library only, with no knowledge of MQTT-SN or the gateway. In scope
-now: CONNECT, CONNACK, PUBLISH, PUBACK, PINGREQ, PINGRESP, DISCONNECT. QoS 0 SUBSCRIBE/SUBACK and
-incoming QoS 0 PUBLISH reads are also included for the e2e observer required by slice 02; this does not add
-subscription handling to the gateway. Other subscription operations and PUBREC/PUBREL/PUBCOMP are added by
+now: CONNECT, CONNACK, PUBLISH, PUBACK, DISCONNECT. PINGREQ and PINGRESP come with the keepalive intent.
+QoS 0 SUBSCRIBE/SUBACK and incoming QoS 0 PUBLISH reads are also included for the e2e observer; this does not
+add subscription handling to the gateway. Other subscription operations and PUBREC/PUBREL/PUBCOMP are added by
 later intents. Packets are read from the TCP stream with full
 framing (the fixed header's variable-length size is read, then exactly that many bytes), fixing the old
 gateway's assumption that a packet arrives in one `recv`. The broker address is a plain TCP `host:port`, with
