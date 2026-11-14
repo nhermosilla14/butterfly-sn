@@ -183,3 +183,65 @@ func TestRetrySleepingClientNotRetransmittedOrTimedOut(t *testing.T) {
 	readAs[mqttsn.Pingresp](t, r.client)
 	expectSilence(t, r.client)
 }
+
+// sleepWithPendingQoS1 subscribes the QoS 1 topic, sends it one downlink QoS 1 PUBLISH that the client does not
+// acknowledge, and puts the client to sleep. It checks that nothing is sent while asleep, past the retry limit,
+// and returns the first PUBLISH.
+func sleepWithPendingQoS1(t *testing.T, r *subRig, topic string) mqttsn.Publish {
+	t.Helper()
+	r.subscribeExact(1, topic, 1)
+	r.brokerSend(brokerPublish(0x02, topic, 0x0505, []byte("q1")))
+	first := readAs[mqttsn.Publish](t, r.client)
+	sleepClient(t, r.client, r.gwAddr, 10)
+	if m, err := readSN(r.client, testSilenceWindow); err == nil {
+		t.Fatalf("datagram while asleep: %+v", m)
+	} else if !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("waiting for silence: %v", err)
+	}
+	return first
+}
+
+// TestRetrySleepParkedQoS1ResentWithDupAfterWake: a QoS 1 PUBLISH unacknowledged when the client sleeps is not
+// resent while asleep. After a CONNECT wake it is resent with DUP and the same msg id, and the client's PUBACK
+// stops it.
+func TestRetrySleepParkedQoS1ResentWithDupAfterWake(t *testing.T) {
+	r := startSubRigTuned(t, 60, retryTune(100*time.Millisecond, 2))
+	const topic = "gw/retry/parked"
+	first := sleepWithPendingQoS1(t, r, topic)
+
+	wakeConnect(r)
+	again := readAs[mqttsn.Publish](t, r.client)
+	if first.DUP || !again.DUP || again.MsgID != first.MsgID || string(again.Data) != "q1" {
+		t.Fatalf("PUBLISH %+v then %+v, want DUP only on the resend with msg id %#x", first, again, first.MsgID)
+	}
+	sendSN(t, r.client, r.gwAddr, mqttsn.Puback{TopicID: again.TopicID, MsgID: again.MsgID, ReturnCode: mqttsn.ReturnAccepted})
+	r.expectBrokerPuback(0x0505)
+	expectSilence(t, r.client)
+}
+
+// TestRetrySleepParkedQoS1SilentAfterWakeDisconnects: a client that stays silent after the wake gets the parked
+// PUBLISH retried retry-limit times, then DISCONNECT, with no broker PUBACK.
+func TestRetrySleepParkedQoS1SilentAfterWakeDisconnects(t *testing.T) {
+	r := startSubRigTuned(t, 60, retryTune(100*time.Millisecond, 2))
+	const topic = "gw/retry/parked-silent"
+	first := sleepWithPendingQoS1(t, r, topic)
+
+	wakeConnect(r)
+	for i := 0; i < 2; i++ {
+		again := readAs[mqttsn.Publish](t, r.client)
+		if !again.DUP || again.MsgID != first.MsgID {
+			t.Fatalf("retransmission %+v, want DUP and msg id %#x", again, first.MsgID)
+		}
+	}
+	expectClientDisconnect(t, r.client)
+	if p := r.nextBroker(); p.Type != pktDisconnect {
+		t.Fatalf("broker packet type %d after give-up, want MQTT DISCONNECT only", p.Type)
+	}
+}
+
+// wakeConnect wakes the sleeping client with CONNECT, the same client id, and checks the CONNACK.
+func wakeConnect(r *subRig) {
+	r.t.Helper()
+	sendSN(r.t, r.client, r.gwAddr, mqttsn.Connect{CleanSession: true, Duration: 60, ClientID: "gw-subscriptions"})
+	readAs[mqttsn.Connack](r.t, r.client)
+}

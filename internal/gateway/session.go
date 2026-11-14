@@ -73,6 +73,8 @@ type session struct {
 	// retryTimer fires at the earliest due one. See retry.go.
 	retries    map[retryKey]*retryEntry
 	retryTimer *time.Timer
+	// parked holds the QoS 1 PUBLISHes awaiting PUBACK while the client sleeps. See clearRetries.
+	parked map[retryKey]mqttsn.Message
 }
 
 // willState is the will a client sent in the handshake. hasWill is set only once the will message arrived;
@@ -137,6 +139,7 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 	s.pendingDownlink = make(map[uint16]uint16)
 	s.preAcked = make(map[uint16]struct{})
 	s.retries = make(map[retryKey]*retryEntry)
+	s.parked = make(map[retryKey]mqttsn.Message)
 	defer s.stopRetryTimer()
 	if c.Will && !s.awaitWill(ctx, log) {
 		return
@@ -290,6 +293,7 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 				}
 				log.Info("client woke with PINGREQ", "buffered", len(s.sleepBuf))
 				s.flushing, s.flushPing = true, true
+				s.restoreParked()
 				disarmSleep()
 				runFlush()
 			case mqttsn.Connect:
@@ -302,6 +306,7 @@ func (s *session) run(ctx context.Context, c mqttsn.Connect) {
 				log.Info("client woke with CONNECT", "buffered", len(s.sleepBuf))
 				s.sleeping = false
 				s.flushing, s.flushPing = true, false
+				s.restoreParked()
 				disarmSleep()
 				if limit > 0 {
 					inactivity = time.NewTimer(limit)

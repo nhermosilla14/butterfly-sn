@@ -34,15 +34,33 @@ func (s *session) sendSupervised(kind string, id uint16, m mqttsn.Message) {
 	s.retries[retryKey{kind: kind, id: id}] = &retryEntry{msg: m, due: time.Now().Add(s.gw.retryInterval)}
 }
 
-// ackRetry removes the entry of a reply that arrived. An id with no entry is ignored.
+// ackRetry removes the entry of a reply that arrived, and any parked copy of it. An id with no entry is ignored.
 func (s *session) ackRetry(kind string, id uint16) {
-	delete(s.retries, retryKey{kind: kind, id: id})
+	k := retryKey{kind: kind, id: id}
+	delete(s.retries, k)
+	delete(s.parked, k)
 }
 
-// clearRetries drops every entry. It runs when the client goes to sleep: a sleeping client is never retransmitted
-// to, and a flush after the wake records fresh entries.
+// clearRetries drops every entry when the client goes to sleep, so a sleeping client is never retransmitted to. A
+// QoS 1 PUBLISH still awaiting the client's PUBACK is parked instead, with its datagram, until the wake. A flush
+// after the wake records fresh entries (see restoreParked).
 func (s *session) clearRetries() {
+	for k, e := range s.retries {
+		if k.kind == kindPublish && s.downlinkAwaitingPuback(k.id) {
+			s.parked[k] = e.msg
+		}
+	}
 	clear(s.retries)
+}
+
+// restoreParked supervises again the parked QoS 1 PUBLISHes at the start of a wake-up flush. Each gets a fresh
+// attempt count and due time, so it is retransmitted with DUP like any other entry.
+func (s *session) restoreParked() {
+	due := time.Now().Add(s.gw.retryInterval)
+	for k, msg := range s.parked {
+		s.retries[k] = &retryEntry{msg: msg, due: due}
+	}
+	clear(s.parked)
 }
 
 // armRetry returns the channel of the retry timer, armed for the earliest due entry. It is nil when the set is
