@@ -32,7 +32,6 @@ so it is useful for manual compatibility checks but not for the automated suite.
 - Unit tests live next to the code (codec round-trips, state machines); fuzz targets for both codecs.
 
 ## Alternatives considered
-- In-process fake broker only — deterministic, but does not prove compatibility with a real broker; it may be added later for failure injection.
 - Mosquitto as a host subprocess — rejected, see above (leaks processes under snap Go, depends on a local install).
 - `testcontainers-go` — needs a runtime socket (a Podman service or Docker, which the user cannot access and does not want running as a second daemon) and has a large transitive dependency graph.
 - In-process fake broker only — deterministic, but does not prove compatibility with a real broker; it may be added later for failure injection.
