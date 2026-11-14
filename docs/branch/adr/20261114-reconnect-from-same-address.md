@@ -1,8 +1,9 @@
 # Reconnect from the same address replaces the session
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-14
 - Deciders: Nicolás Hermosilla
+- Approved by: Nicolás Hermosilla
 - Spec area: transport-and-sessions.md
 
 ## Context

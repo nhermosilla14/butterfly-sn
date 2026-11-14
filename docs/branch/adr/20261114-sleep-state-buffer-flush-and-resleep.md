@@ -1,9 +1,10 @@
 # Sleep state, buffering, wake-up flush and re-sleep
 
 - Replaces: 20261114-sleep-state-and-buffer-flush
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-14
 - Deciders: Nicolás Hermosilla
+- Approved by: Nicolás Hermosilla
 - Spec area: sleep.md, transport-and-sessions.md, topics-and-pubsub.md
 
 ## Context
