@@ -1,0 +1,19 @@
+# Secrets
+.env
+*.pem
+*.key
+*.crt
+credentials*
+
+# Build artifacts
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+coverage.*
+
+# Editors and OS
+.directory
+.idea/
+.vscode/
