@@ -1,8 +1,9 @@
 # YAML configuration library
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-13
 - Deciders: Nicolás Hermosilla
+- Approved by: Nicolás Hermosilla
 - Spec area: configuration.md
 
 ## Context

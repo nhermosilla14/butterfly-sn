@@ -1,8 +1,9 @@
 # Package layout and per-session concurrency
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-13
 - Deciders: Nicolás Hermosilla
+- Approved by: Nicolás Hermosilla
 - Spec area: transport-and-sessions.md, topics-and-pubsub.md
 
 ## Context
@@ -15,11 +16,11 @@ Module `github.com/nhermosilla14/butterfly-sn`. Layout:
 - `cmd/butterfly-sn`: main, flags (`-config`), signal handling.
 - `internal/config`: YAML loading and validation.
 - `internal/mqttsn`: MQTT-SN packet codec (encode/decode, no I/O). Pure functions, fuzzable.
-- `mqtt311/`: the MQTT 3.1.1 library, a separate Go module (see below and the ADR on the broker client).
+- `butterfly-mqtt-client/`: the MQTT 3.1.1 library, a separate Go module (see below and the ADR on the broker client).
 - `internal/gateway`: UDP server and sessions.
 
-The MQTT library is built to be extracted into its own repository later. It lives at `mqtt311/` with its own
-`go.mod` (module `github.com/nhermosilla14/mqtt311`, final name to be confirmed on extraction), its own
+The MQTT library is built to be extracted into its own repository later. It lives at `butterfly-mqtt-client/` with its own
+`go.mod` (module `github.com/nhermosilla14/butterfly-mqtt-client`), its own
 README, tests and fuzz targets. Rules: standard library only; it never imports the gateway or any other
 package of this repo; its API is public and documented, with no gateway concepts (client ids, sessions,
 MQTT-SN) in it. The root `go.mod` requires it and points to the local directory with a `replace` directive, so
