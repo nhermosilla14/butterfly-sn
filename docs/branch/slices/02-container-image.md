@@ -1,6 +1,6 @@
 # Container image
 
-- Status: In progress
+- Status: Done
 - Intents: 20261114-release-artifacts-and-image
 - ADRs: 20261114-build-release-and-container-pipeline
 - Depends on: 01

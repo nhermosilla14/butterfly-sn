@@ -2,16 +2,20 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 DIST ?= dist
 BIN ?= bin
+HOSTARCH := $(shell uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
+TESTIMAGE := butterfly-sn-test:$(VERSION)-$(shell echo $$$$)
 
 PKG := github.com/nhermosilla14/butterfly-sn
 LDFLAGS := -s -w -X $(PKG)/internal/app.Version=$(VERSION)
 GOBUILD := CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "$(LDFLAGS)"
 
-.PHONY: help version build dist test check-docs check clean
+.PHONY: help version build dist image image-test test check-docs check clean
 
 help:
 	@echo "build       host binary in $(BIN)/"
 	@echo "dist        cross-built binaries, archives and SHA256SUMS in $(DIST)/"
+	@echo "image       multi-arch (amd64, arm64) scratch image manifest butterfly-sn:$(VERSION), built with podman"
+	@echo "image-test  build the host-arch image and smoke-test it with podman (no Docker)"
 	@echo "test        formatting, vet, build and tests (code checks only)"
 	@echo "check-docs  merge gate: docs/branch must be empty (fails while branch records exist)"
 	@echo "check       test plus check-docs"
@@ -45,6 +49,20 @@ dist:
 	done
 	rm -rf "$(DIST)/.stage"
 	cd "$(DIST)" && sha256sum butterfly-sn_*.tar.gz butterfly-sn_*.zip | LC_ALL=C sort -k2 > SHA256SUMS
+
+# The Containerfile copies from dist/, so the image targets only work with the default DIST.
+image: dist
+	@[ "$(DIST)" = dist ] || { echo "image: DIST must be 'dist' (the Containerfile copies from dist/), got '$(DIST)'"; exit 1; }
+	podman manifest rm "butterfly-sn:$(VERSION)" >/dev/null 2>&1 || podman rmi "butterfly-sn:$(VERSION)" >/dev/null 2>&1 || true
+	podman build --platform linux/amd64,linux/arm64 --manifest "butterfly-sn:$(VERSION)" --build-arg VERSION=$(VERSION) .
+
+# image-test always removes the test image, even when the tests fail.
+image-test: dist
+	@[ "$(DIST)" = dist ] || { echo "image-test: DIST must be 'dist' (the Containerfile copies from dist/), got '$(DIST)'"; exit 1; }
+	@img="$(TESTIMAGE)"; \
+	podman build --platform linux/$(HOSTARCH) -t "$$img" --build-arg VERSION=$(VERSION) . || { podman rmi -f "$$img" >/dev/null 2>&1; exit 1; }; \
+	BUTTERFLY_SN_IMAGE="$$img" BUTTERFLY_SN_IMAGE_VERSION="$(VERSION)" go test -tags image -count=1 -v ./test/image/...; rc=$$?; \
+	podman rmi -f "$$img" >/dev/null 2>&1; exit $$rc
 
 # test runs the code checks only. check-docs is separate because it is the merge gate and is expected to fail
 # while branch records exist under docs/branch.
