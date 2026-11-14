@@ -1,6 +1,6 @@
 # Will handshake and publication
 
-- Status: Accepted
+- Status: In progress
 - Date: 2026-11-14
 - Owner: Nicolás Hermosilla
 - Approved by: Nicolás Hermosilla
