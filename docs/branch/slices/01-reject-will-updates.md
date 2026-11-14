@@ -1,6 +1,7 @@
 # Reject will updates
 
 - Intents: 20261114-will-update-rejection
+- Status: Done
 
 ## Scope
 WILLTOPICUPD (including the empty form) and WILLMSGUPD from a session get WILLTOPICRESP and WILLMSGRESP with

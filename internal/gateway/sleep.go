@@ -57,7 +57,8 @@ func (s *session) holdToSleep(broker *mqtt.Client, log *slog.Logger) error {
 
 // ignoredWhileAsleep reports whether a client packet must be ignored while the client sleeps. DISCONNECT is always
 // handled. PINGREQ and CONNECT wake the client. During a PINGREQ flush REGACK and PUBACK are handled, as is a PUBACK
-// for a PUBLISH sent on wake, which may arrive after the flush. Everything else is logged and dropped.
+// for a PUBLISH sent on wake, which may arrive after the flush. Will updates are answered during a flush, as the
+// client is awake then. Everything else is logged and dropped.
 func (s *session) ignoredWhileAsleep(m mqttsn.Message, log *slog.Logger) bool {
 	switch p := m.(type) {
 	case mqttsn.Disconnect:
@@ -73,6 +74,11 @@ func (s *session) ignoredWhileAsleep(m mqttsn.Message, log *slog.Logger) bool {
 		}
 	case mqttsn.Pingreq, mqttsn.Connect:
 		if !s.flushing {
+			return false
+		}
+	case mqttsn.WillTopicUpd, mqttsn.WillMsgUpd:
+		// Answered only while the client is awake in a flush.
+		if s.flushing {
 			return false
 		}
 	}

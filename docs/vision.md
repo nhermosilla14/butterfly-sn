@@ -31,7 +31,6 @@ had a defect or quirk, "New" means not in the old gateway.
 | Patch | DISCONNECT to packets from unknown or non-connected clients | Keep (patch) |
 | Patch | WILLTOPIC/WILLMSG accepted from a client in the disconnected state | Keep (patch) |
 | Will | WILLTOPICREQ/WILLMSGREQ flow, will published on abnormal loss | Keep |
-| Will | WILLTOPICUPD/WILLMSGUPD | New |
 | Will | Will published when the gateway shuts down | New |
 | Sleep | Asleep/Awake states, buffering, flush on PINGREQ | Keep |
 | Sleep | PINGRESP always sent after wake-up flush | Fix |
@@ -55,6 +54,7 @@ had a defect or quirk, "New" means not in the old gateway.
 - Log monitor and shared-memory logging.
 - TLS and authentication towards the broker (v1: plain TCP, no credentials).
 - QoS 2 (planned for a later release).
+- Will updates (WILLTOPICUPD/WILLMSGUPD): MQTT 3.1.1 cannot change a will on a live connection. The gateway answers them with Not supported and keeps the will given at CONNECT.
 
 ## Constraints
 - Compatible with MQTT-SN v1.2 as implemented by the clients in use; the spec is `olddocs/MQTT-SN_spec_v1.2.pdf`.

@@ -22,7 +22,7 @@ keepalive, broker-loss handling, will handling, sleep with buffered downlink and
 | `cmd/butterfly-sn` | `main`: signals (SIGINT, SIGTERM), calls `internal/app` |
 | `internal/app` | Startup path shared by `main` and the e2e tests: flags (`-config`, `-version`), config, logging, run; `Version` is set by the linker |
 | `internal/config` | YAML loading, defaults, validation (unknown keys rejected) |
-| `internal/mqttsn` | MQTT-SN packet codec, no I/O (CONNECT, CONNACK, REGISTER, REGACK, PUBLISH, PUBACK, SUBSCRIBE, SUBACK, UNSUBSCRIBE, UNSUBACK, PINGREQ, PINGRESP, DISCONNECT, will messages, SEARCHGW, GWINFO, ADVERTISE) |
+| `internal/mqttsn` | MQTT-SN packet codec, no I/O (CONNECT, CONNACK, REGISTER, REGACK, PUBLISH, PUBACK, SUBSCRIBE, SUBACK, UNSUBSCRIBE, UNSUBACK, PINGREQ, PINGRESP, DISCONNECT, will messages including updates and their responses, SEARCHGW, GWINFO, ADVERTISE) |
 | `internal/gateway` | UDP listener and router; one session goroutine, one broker reader goroutine and a normal-topic table per client |
 | `butterfly-mqtt-client/` | Standalone MQTT 3.1.1 client module (own `go.mod`, stdlib only, no gateway concepts), joined by a `replace` directive so it can move to its own repo |
 | `Makefile`, `Containerfile` | Build and release: `make dist` cross-builds static binaries, archives and checksums; `make image` assembles the scratch image from them with podman |
@@ -41,6 +41,9 @@ keepalive, broker-loss handling, will handling, sleep with buffered downlink and
   WILLMSGREQ, WILLMSG. An empty will topic skips the message prompt and connects without a will; a QoS 2 will
   gets CONNACK Not supported. The whole handshake has a 10 second timeout; on timeout the session is removed
   and the client gets DISCONNECT. The collected will travels in the broker CONNECT.
+- WILLTOPICUPD and WILLMSGUPD from an active client are answered with WILLTOPICRESP and WILLMSGRESP, return code
+  Not supported. Nothing else changes: the broker connection and the stored will stay as given at CONNECT. Asleep
+  clients ignore them, except during a wake flush where they are answered. Unknown senders get DISCONNECT.
 - SEARCHGW from any sender is answered with one unicast GWINFO (configured `gateway_id`) after a random 0-500 ms
   delay; the radius is ignored. GWINFO and ADVERTISE from clients are ignored. Discovery is handled before
   session lookup, never creates a session and never contacts the broker. A pending reply is joined by `Run`

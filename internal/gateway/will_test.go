@@ -186,8 +186,8 @@ func (r *willRig) stop() error {
 }
 
 // openSession connects clientID with the given keepalive, with a will when will is set, and returns once the
-// broker has accepted the session and the client has its CONNACK.
-func (r *willRig) openSession(clientID string, duration uint16, will bool) {
+// broker has accepted the session and the client has its CONNACK. It returns the broker CONNECT.
+func (r *willRig) openSession(clientID string, duration uint16, will bool) mqtt.Packet {
 	r.t.Helper()
 	sendSN(r.t, r.client, r.gwAddr, mqttsn.Connect{CleanSession: true, Will: will, Duration: duration, ClientID: clientID})
 	if will {
@@ -196,11 +196,12 @@ func (r *willRig) openSession(clientID string, duration uint16, will bool) {
 		readAs[mqttsn.WillMsgReq](r.t, r.client)
 		sendSN(r.t, r.client, r.gwAddr, mqttsn.WillMsg{Payload: []byte("gone")})
 	}
-	r.broker.nextConnect(r.t)
+	connect := r.broker.nextConnect(r.t)
 	r.broker.allow()
 	if ack := readAs[mqttsn.Connack](r.t, r.client); ack.ReturnCode != mqttsn.ReturnAccepted {
 		r.t.Fatalf("CONNACK %+v, want accepted", ack)
 	}
+	return connect
 }
 
 // newClient opens a client socket, closed at cleanup.
