@@ -15,7 +15,7 @@ accepted a dedicated connection for it, and DISCONNECT. This is the walking skel
 
 ## End-to-end test
 - Valid config starts the gateway; missing or invalid config exits non-zero.
-- CONNECT gets CONNACK Accepted; the broker shows one connection with the client id (observer via the broker's $SYS or a will-less second client is not needed: check with a connection counter from the broker log or session probe, decided in the test).
+- CONNECT gets CONNACK Accepted; the Mosquitto log (connection messages enabled in the generated config) shows one new connection with the client id.
 - Broker address pointing to a closed port: CONNECT gets CONNACK Congestion.
 - DISCONNECT gets DISCONNECT and the broker connection closes.
 - SIGINT and SIGTERM close broker connections and exit 0.
