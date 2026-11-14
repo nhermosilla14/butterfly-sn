@@ -1,8 +1,9 @@
 # When the will is published
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-14
 - Deciders: Nicolás Hermosilla
+- Approved by: Nicolás Hermosilla
 - Spec area: will.md, transport-and-sessions.md
 
 ## Context
