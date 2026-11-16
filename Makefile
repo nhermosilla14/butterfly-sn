@@ -50,15 +50,15 @@ dist:
 	rm -rf "$(DIST)/.stage"
 	cd "$(DIST)" && sha256sum butterfly-sn_*.tar.gz butterfly-sn_*.zip | LC_ALL=C sort -k2 > SHA256SUMS
 
-# The Containerfile copies from dist/, so the image targets only work with the default DIST.
+# The Dockerfile copies from dist/, so the image targets only work with the default DIST.
 image: dist
-	@[ "$(DIST)" = dist ] || { echo "image: DIST must be 'dist' (the Containerfile copies from dist/), got '$(DIST)'"; exit 1; }
+	@[ "$(DIST)" = dist ] || { echo "image: DIST must be 'dist' (the Dockerfile copies from dist/), got '$(DIST)'"; exit 1; }
 	podman manifest rm "butterfly-sn:$(VERSION)" >/dev/null 2>&1 || podman rmi "butterfly-sn:$(VERSION)" >/dev/null 2>&1 || true
 	podman build --platform linux/amd64,linux/arm64 --manifest "butterfly-sn:$(VERSION)" --build-arg VERSION=$(VERSION) .
 
 # image-test always removes the test image, even when the tests fail.
 image-test: dist
-	@[ "$(DIST)" = dist ] || { echo "image-test: DIST must be 'dist' (the Containerfile copies from dist/), got '$(DIST)'"; exit 1; }
+	@[ "$(DIST)" = dist ] || { echo "image-test: DIST must be 'dist' (the Dockerfile copies from dist/), got '$(DIST)'"; exit 1; }
 	@img="$(TESTIMAGE)"; \
 	podman build --platform linux/$(HOSTARCH) -t "$$img" --build-arg VERSION=$(VERSION) . || { podman rmi -f "$$img" >/dev/null 2>&1; exit 1; }; \
 	BUTTERFLY_SN_IMAGE="$$img" BUTTERFLY_SN_IMAGE_VERSION="$(VERSION)" go test -tags image -count=1 -v ./test/image/...; rc=$$?; \

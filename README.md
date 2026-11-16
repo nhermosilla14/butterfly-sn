@@ -71,7 +71,7 @@ butterfly-mqtt-client/        standalone MQTT 3.1.1 client module (own go.mod)
 test/e2e/                     end-to-end tests
 test/image/                   container image smoke test (build tag `image`, run by `make image-test`)
 test/workflows/               checks that the CI workflows call existing Makefile targets
-Makefile, Containerfile       build, release and image definitions
+Makefile, Dockerfile          build, release and image definitions
 .github/workflows/            CI and release workflows
 docs/                         vision, architecture, spec, ADRs, branch records
 olddocs/                      reference documentation of the legacy Paho gateway
