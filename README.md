@@ -74,7 +74,6 @@ test/workflows/               checks that the CI workflows call existing tasks
 Taskfile.yml, Dockerfile      build, release and image definitions
 .github/workflows/            CI and release workflows
 docs/                         vision, architecture, spec, ADRs, branch records
-olddocs/                      reference documentation of the legacy Paho gateway
 scripts/check-branch-docs.sh  merge gate for records
 .agents/skills/general-software-development/   vendored workflow skill (rules, templates)
 AGENTS.md                     rules for humans and agents

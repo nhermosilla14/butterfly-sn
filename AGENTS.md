@@ -30,14 +30,6 @@ list is the entry point, not a second copy.
 7. **Tooling and workflow live in Conventions**, not ADRs. Edit them in place.
 8. **Update this file** when rules or conventions change.
 
-## Reference material
-`olddocs/` documents the legacy solution this project reimplements: its behavior and technical
-analysis. It is read-only background for requirements and design, not a source of decisions: the
-decisions live in `docs/`. It is not frozen and may be corrected when something in it proves wrong.
-Do not copy old code or old technical choices from it without an ADR. The legacy solution is the
-patched Eclipse Paho MQTT-SN gateway (C++), replaced to get a maintainable, robust, cross-platform
-Go implementation. Never copy code from the Paho sources (EPL/EDL) into this repo.
-
 ## Conventions
 - Tooling: Go (`go test ./...`, `gofmt`, `go vet`); e2e tests need Docker (testcontainers-go). The `Taskfile.yml` is the
   single entry point for builds and releases (`task test`, `task check`, `task dist`, `task image`, `task
@@ -51,3 +43,4 @@ Go implementation. Never copy code from the Paho sources (EPL/EDL) into this rep
   only in `Owner`/`Deciders` and `Approved by` of intents and ADRs.
 - Style: idiomatic Go, `gofmt`, standard library first, minimal dependencies (each one needs an ADR).
 - Never commit secrets; keep them out of git via `.gitignore` and provide `.env.example`.
+- Never copy code from the Paho sources (EPL/EDL) into this repo.

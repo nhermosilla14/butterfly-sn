@@ -9,7 +9,7 @@
 ## Context
 The gateway must handle about 100 clients over one UDP socket, each with its own TCP connection to the
 broker (transparent mode). The old gateway used five threads and global queues, which caused stalls (one
-blocking broker connect froze uplink traffic for everyone) and races (see `olddocs/technical/known-issues.md`).
+blocking broker connect froze uplink traffic for everyone) and races.
 
 ## Decision
 Module `github.com/nhermosilla14/butterfly-sn`. Layout:

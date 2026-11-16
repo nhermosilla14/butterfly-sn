@@ -1,6 +1,6 @@
 # MQTT-SN v1.2 conformance
 
-How closely butterfly-sn follows the MQTT-SN v1.2 specification (`olddocs/MQTT-SN_spec_v1.2.pdf`), where it
+How closely butterfly-sn follows the MQTT-SN v1.2 specification (v1.2, 2013), where it
 deliberately or accidentally departs from it, and which features it does not offer. Read this before putting a
 client on the gateway that you did not test.
 
