@@ -1,12 +1,12 @@
 version: '3'
 
 # Build, test and release helpers. `task --list` shows the public tasks; the ones marked
-# `internal: true` are steps reused by others. Override VERSION, DIST or BIN on the command line:
-# `task dist VERSION=v1.2.3`.
+# `internal: true` are steps reused by others. Override VERSION on the command line
+# (`task dist VERSION=v1.2.3`) or through the environment, and DIST or BIN on the command line.
 
 vars:
   VERSION:
-    sh: git describe --tags --always --dirty 2>/dev/null || echo dev
+    sh: echo "${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
   DIST: dist
   BIN: bin
   HOSTARCH:
@@ -31,6 +31,30 @@ tasks:
     desc: Print the resolved version
     cmds:
       - echo "{{.VERSION}}"
+    silent: true
+
+  next-version:
+    desc: Next release version (patch bump of the latest v* tag, v0.1.0 if there is none)
+    cmds:
+      - |
+        last=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+        if [ -z "$last" ]; then
+          echo v0.1.0
+          exit 0
+        fi
+        version=${last#v}
+        major=${version%%.*}
+        rest=${version#*.}
+        minor=0
+        patch=0
+        if [ "$rest" != "$version" ]; then
+          minor=${rest%%.*}
+          if [ "${rest#*.}" != "$rest" ]; then
+            patch=${rest#*.}
+          fi
+        fi
+        patch=${patch%%[!0-9]*}
+        echo "v${major}.${minor}.$((${patch:-0} + 1))"
     silent: true
 
   build:

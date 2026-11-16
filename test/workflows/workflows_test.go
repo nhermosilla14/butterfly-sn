@@ -33,6 +33,7 @@ var (
 	assignRe   = regexp.MustCompile(`^\w+=`)
 	installRe  = regexp.MustCompile(`^go install github\.com/go-task/task/v3/cmd/task@v3\.\d+\.\d+$`)
 	pathLineRe = regexp.MustCompile(`^echo "\$\(go env GOPATH\)/bin" >> "\$GITHUB_PATH"$`)
+	versionRe  = regexp.MustCompile(`^echo "version=\$\(task next-version\)" >> "\$GITHUB_OUTPUT"$`)
 )
 
 func load(t *testing.T, path string) workflow {
@@ -95,7 +96,7 @@ func checkSteps(w workflow, targets map[string]bool, allowed ...string) []string
 					installed = true
 					continue
 				}
-				if pathLineRe.MatchString(line) {
+				if pathLineRe.MatchString(line) || versionRe.MatchString(line) {
 					continue
 				}
 				if strings.HasPrefix(line, "task ") {
@@ -130,9 +131,9 @@ func hasPrefixAny(s string, prefixes []string) bool {
 	return false
 }
 
-// The release job's gh step is a multi-line script; only its gh line is checked, the
-// other lines (flag selection) are shell glue and are listed as allowed prefixes.
-var releaseAllowed = []string{"gh release create", "flags=", "case "}
+// The release job's only non-task command is the gh release call; the version comes from
+// `task next-version` (checked below) and the archives from `task dist`.
+var releaseAllowed = []string{"gh release create"}
 
 func callsTask(j job, target string) bool {
 	for _, s := range j.Steps {
@@ -192,15 +193,44 @@ func TestCIStructure(t *testing.T) {
 	}
 }
 
+func picksNextVersion(j job) bool {
+	for _, s := range j.Steps {
+		for _, line := range strings.Split(s.Run, "\n") {
+			if versionRe.MatchString(strings.TrimSpace(line)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestReleaseStructure(t *testing.T) {
 	w := load(t, "../../.github/workflows/release.yml")
 	if w.Permissions["contents"] != "write" {
 		t.Error("release.yml must have contents: write")
 	}
-	if len(w.On) != 1 || !strings.Contains(fmt.Sprint(w.On["push"]), "v*") {
-		t.Errorf("release.yml must trigger only on push of tags v*, got %v", w.On)
+	if len(w.On) != 1 {
+		t.Fatalf("release.yml must trigger on one event, got %v", w.On)
 	}
-	if !callsTask(w.Jobs["release"], "dist") {
+	push, ok := w.On["push"].(map[string]any)
+	if !ok {
+		t.Fatal("release.yml must trigger on push")
+	}
+	if _, hasTags := push["tags"]; hasTags {
+		t.Error("release.yml must not trigger on tags: releases come from main merges")
+	}
+	branches := fmt.Sprint(push["branches"])
+	if !strings.Contains(branches, "main") || strings.Contains(branches, "develop") {
+		t.Errorf("release.yml push branches = %s, want main only", branches)
+	}
+	job := w.Jobs["release"]
+	if !callsTask(job, "test") {
+		t.Error("release.yml must call task test")
+	}
+	if !picksNextVersion(job) {
+		t.Error("release.yml must pick the version with task next-version")
+	}
+	if !callsTask(job, "dist") {
 		t.Error("release.yml must call task dist")
 	}
 }
