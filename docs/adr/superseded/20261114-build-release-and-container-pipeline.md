@@ -1,6 +1,6 @@
 # Build, release and container pipeline
 
-- Status: Accepted
+- Status: Superseded by 20261116-taskfile-as-build-entry-point
 - Date: 2026-11-14
 - Deciders: Nicolás Hermosilla
 - Approved by: Nicolás Hermosilla
@@ -26,7 +26,7 @@ dependency that needs a C toolchain.
 - **Archives.** `dist/butterfly-sn_<version>_<os>_<arch>.tar.gz` for linux targets and `.zip` for windows, each
   holding the binary, `LICENSE` and `config.example.yaml` in a directory of the same name; one `SHA256SUMS` file
   lists every archive. File times inside archives are normalised so archives are reproducible too.
-- **Image.** `Containerfile` is `FROM scratch`, copies `dist/linux-$TARGETARCH/butterfly-sn` to `/butterfly-sn`,
+- **Image.** `Dockerfile` is `FROM scratch`, copies `dist/linux-$TARGETARCH/butterfly-sn` to `/butterfly-sn`,
   sets `USER 65534:65534`, `EXPOSE 5684/udp`, `ENTRYPOINT ["/butterfly-sn"]` and
   `CMD ["-config", "/etc/butterfly-sn/config.yaml"]`, with OCI labels for version and source. It has no `RUN`
   step, so building the other architecture needs no emulation. `make image` runs `podman build --platform

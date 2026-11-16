@@ -1,6 +1,6 @@
 //go:build image
 
-// Package image smoke-tests the container image built by `make image-test`. It needs rootless podman and
+// Package image smoke-tests the container image built by `task image-test`. It needs rootless podman and
 // BUTTERFLY_SN_IMAGE (image name) and BUTTERFLY_SN_IMAGE_VERSION (stamped version) in the environment.
 package image
 
@@ -27,7 +27,7 @@ func setup(t *testing.T) (image, version string) {
 	}
 	image = os.Getenv("BUTTERFLY_SN_IMAGE")
 	if image == "" {
-		t.Skip("BUTTERFLY_SN_IMAGE not set; run `make image-test`")
+		t.Skip("BUTTERFLY_SN_IMAGE not set; run `task image-test`")
 	}
 	return image, os.Getenv("BUTTERFLY_SN_IMAGE_VERSION")
 }

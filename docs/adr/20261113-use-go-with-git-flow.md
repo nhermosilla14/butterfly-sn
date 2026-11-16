@@ -14,7 +14,7 @@ memory safety. This is a personal project published on GitHub; the owner chose g
 Implement in Go (current stable toolchain, standard library first; every third-party dependency needs
 its own ADR). Use git-flow (`git-flow-workflow` skill): `develop` is the integration branch, feature and fix branches
 merge into it, `main` holds releases. Commits use the personal git identity. License: MIT; code is written from the spec and from
-`olddocs/` behaviour, never copied from Paho (EPL/EDL).
+the old gateway's behaviour, never copied from Paho (EPL/EDL).
 
 ## Alternatives considered
 - Rust — strong fit for robustness, but the owner is currently learning Go and wants it as the default for services.

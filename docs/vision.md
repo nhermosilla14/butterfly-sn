@@ -1,7 +1,7 @@
 # Vision
 
 `butterfly-sn` is a transparent MQTT-SN v1.2 gateway written in Go. It replaces a patched build of the
-Eclipse Paho MQTT-SN gateway (C++), which is documented in `olddocs/`.
+Eclipse Paho MQTT-SN gateway (C++).
 
 ## Why
 - One static binary and a small container image; no Cygwin on Windows, native Linux and Win64 builds.
@@ -18,8 +18,8 @@ MQTT broker, typically on a local host or inside a container.
 - Passes conformance checks for the supported MQTT-SN features against the spec.
 
 ## Behaviours to deliver (cut into intents later)
-Reference: files in `olddocs/`. "Keep" means same behaviour as the old gateway, "Fix" means the old one
-had a defect or quirk, "New" means not in the old gateway.
+"Keep" means same behaviour as the old gateway, "Fix" means the old one had a defect or quirk, "New"
+means not in the old gateway.
 
 | Area | Behaviour | Decision |
 |---|---|---|
@@ -57,7 +57,7 @@ had a defect or quirk, "New" means not in the old gateway.
 - Will updates (WILLTOPICUPD/WILLMSGUPD): MQTT 3.1.1 cannot change a will on a live connection. The gateway answers them with Not supported and keeps the will given at CONNECT.
 
 ## Constraints
-- Compatible with MQTT-SN v1.2 as implemented by the clients in use; the spec is `olddocs/MQTT-SN_spec_v1.2.pdf`.
-- Implemented from the spec and from behaviour documented in `olddocs/`; no code is copied from Paho (EPL/EDL).
+- Compatible with MQTT-SN v1.2 as implemented by the clients in use.
+- Implemented from the spec and from the old gateway's observable behaviour; no code is copied from Paho (EPL/EDL).
 - Licensed MIT.
 - Coexistence: the new gateway replaces the old one on a host; both are not expected to run on the same ports.

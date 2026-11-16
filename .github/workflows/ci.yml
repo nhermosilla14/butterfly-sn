@@ -23,7 +23,11 @@ jobs:
           cache-dependency-path: |
             go.sum
             butterfly-mqtt-client/go.sum
-      - run: make test
+      - name: Install Task
+        run: |
+          go install github.com/go-task/task/v3/cmd/task@v3.54.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - run: task test
 
   dist:
     runs-on: ubuntu-latest
@@ -35,7 +39,11 @@ jobs:
           cache-dependency-path: |
             go.sum
             butterfly-mqtt-client/go.sum
-      - run: make dist
+      - name: Install Task
+        run: |
+          go install github.com/go-task/task/v3/cmd/task@v3.54.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - run: task dist
       - uses: actions/upload-artifact@v4
         with:
           name: dist
@@ -50,4 +58,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: make check-docs
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            butterfly-mqtt-client/go.sum
+      - name: Install Task
+        run: |
+          go install github.com/go-task/task/v3/cmd/task@v3.54.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - run: task check-docs
