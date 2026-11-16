@@ -156,7 +156,10 @@ func TestResleepCapDropsNewestWhenHeldReturns(t *testing.T) {
 
 	wakePing(r)
 	readAs[mqttsn.Register](t, r.client) // unanswered
-	r.brokerSend(brokerPublish(0x00, known, 0, []byte("newest")))
+	// QoS 1 with the broker PUBACK awaited, so the gateway has buffered it before the SLEEP arrives; a QoS 0
+	// publish races the client's SLEEP and the test then depends on the wrong ordering.
+	r.brokerSend(brokerPublish(0x02, known, 0x0b0b, []byte("newest")))
+	r.expectBrokerPuback(0x0b0b)
 
 	sleepClient(t, r.client, r.gwAddr, 60)
 	wakePing(r)

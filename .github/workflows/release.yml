@@ -1,11 +1,19 @@
 name: Release
 
+# Every push to main publishes a release: the next patch version, the three self-contained
+# binaries and their checksums.
+
 on:
   push:
-    tags: ['v*']
+    branches: [main]
 
 permissions:
   contents: write
+
+# Serialise releases: two merges in quick succession must not compute the same version.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -13,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0 # tags, for the version bump
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -24,12 +32,15 @@ jobs:
         run: |
           go install github.com/go-task/task/v3/cmd/task@v3.54.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Pick the next version
+        id: version
+        run: echo "version=$(task next-version)" >> "$GITHUB_OUTPUT"
       - run: task test
       - run: task dist
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          flags=""
-          case "$GITHUB_REF_NAME" in *-*) flags="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.zip dist/SHA256SUMS --generate-notes --verify-tag $flags
+          VERSION: ${{ steps.version.outputs.version }}
+        run: gh release create "$VERSION" dist/*.tar.gz dist/*.zip dist/SHA256SUMS --target "$GITHUB_SHA" --generate-notes
