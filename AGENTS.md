@@ -30,20 +30,17 @@ list is the entry point, not a second copy.
 7. **Tooling and workflow live in Conventions**, not ADRs. Edit them in place.
 8. **Update this file** when rules or conventions change.
 
-## Reference material
-`olddocs/` documents the legacy solution this project reimplements: its behavior and technical
-analysis. It is read-only background for requirements and design, not a source of decisions: the
-decisions live in `docs/`. It is not frozen and may be corrected when something in it proves wrong.
-Do not copy old code or old technical choices from it without an ADR. The legacy solution is the
-patched Eclipse Paho MQTT-SN gateway (C++), replaced to get a maintainable, robust, cross-platform
-Go implementation. Never copy code from the Paho sources (EPL/EDL) into this repo.
-
 ## Conventions
-- Tooling: Go (`go test ./...`, `gofmt`, `go vet`); build and CI helpers are decided in ADRs and
-  recorded here when they exist.
+- Tooling: Go (`go test ./...`, `gofmt`, `go vet`); e2e tests need Docker (testcontainers-go). The `Taskfile.yml` is the
+  single entry point for builds and releases (`task test`, `task check`, `task dist`, `task image`, `task
+  image-test`); CI installs task with a pinned `go install` and calls only task targets, so add a task before using a
+  new command in a workflow. Container work uses the podman CLI only: never start the Podman API socket.
+- E2E tests use unique client ids and topic names per run: the shared broker keeps state and logs across
+  `-count` runs, so fixed names make repeated runs fail.
 - Git workflow: git-flow (skill `git-flow-workflow`). Integration branch: `develop`; `main` holds releases.
 - Workflow: branch names `feature/<short-title>` or `fix/<short-title>` from `develop`; imperative commit subjects.
   No author emails or names here; each contributor commits with their own git identity. Names appear
   only in `Owner`/`Deciders` and `Approved by` of intents and ADRs.
 - Style: idiomatic Go, `gofmt`, standard library first, minimal dependencies (each one needs an ADR).
 - Never commit secrets; keep them out of git via `.gitignore` and provide `.env.example`.
+- Never copy code from the Paho sources (EPL/EDL) into this repo.
