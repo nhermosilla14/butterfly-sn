@@ -41,9 +41,11 @@ task clean        # remove dist/ and bin/
 `task dist VERSION=v1.2.3`. `task image` builds from `dist/`, so `DIST` must stay `dist`. It leaves untagged
 per-platform images in podman's store; remove them with `podman image prune` if you do not want them.
 
-To publish a release, tag a commit on `main` with `vX.Y.Z` and push the tag. The `Release` workflow tests,
-builds `task dist` and attaches the archives and `SHA256SUMS` to a GitHub release (tags containing a hyphen are
-prereleases). The workflows have not run on GitHub yet because the repository has no remote.
+Every push to `main` publishes a release: the `Release` workflow runs the tests, builds the archives with
+`task dist` and attaches them plus `SHA256SUMS` to a GitHub release. The version is the latest `v*` tag with its
+patch incremented, so the first release is `v0.1.0`; tag `v0.2.0` yourself when you want to open a new minor or
+major. The archives hold self-contained static binaries for `linux_amd64`, `linux_arm64` and `windows_amd64`: no
+runtime, no cgo, no DLLs or shared libraries.
 
 ## Container
 The image is `FROM scratch` with only the static binary, runs as UID 65534 and reads

@@ -49,16 +49,20 @@ podman but no Docker.
 Two GitHub Actions workflows call only `Taskfile.yml` tasks, after installing task with a pinned
 `go install github.com/go-task/task/v3/cmd/task@v3.54.0`. `CI` runs `task test` and `task dist` on pushes to
 `develop` and `main` and on pull requests, and runs the branch-record merge gate on pull requests into `develop`.
-`Release` runs on tags matching `v*`: it runs the tests and `task dist`, then attaches the archives and
-`SHA256SUMS` to a GitHub release, marking hyphenated tags as prereleases.
+`Release` runs on every push to `main`: it takes the next version from `task next-version` (the latest `v*` tag
+with its patch incremented, `v0.1.0` when no tag exists), runs the tests, builds the archives with `task dist` and
+that version stamped into the binary, and creates a GitHub release carrying the three archives and `SHA256SUMS`.
+Releases are serialised, so two merges in a row cannot compute the same version.
 - Criteria:
   - Both workflow files are valid YAML and every `run:` step calls an existing Taskfile task, except the pinned
-    task install step and the single `gh release create` step of the release workflow.
+    task install step, the version output line and the single `gh release create` step.
   - Every job that calls a task installs it first with a pinned `go-task` version.
+  - `Release` triggers on `main` pushes only, never on tags, and its release carries the `linux_amd64`,
+    `linux_arm64` and `windows_amd64` archives plus `SHA256SUMS`.
   - Triggers, permissions and the jobs named above are present, and only first-party actions pinned to a major
     version are used.
 - Tests: TestWorkflowsUseOnlyTaskTargets, TestCIStructure, TestReleaseStructure, TestCheckerRejectsBadWorkflows
-- Unverified: the workflows have never run on GitHub because no remote is configured; their first execution after the repository is pushed (2026-11-14)
+- Verified: `CI` ran green on the first push to `main` (run 43943134099, 2026-11-16).
 
 ## Not supported
 - Pushing images to a registry, signing artifacts, SBOMs and provenance attestations.
