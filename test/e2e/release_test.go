@@ -108,19 +108,19 @@ func TestBuiltBinaryAnswersSearchgw(t *testing.T) {
 	}
 }
 
-// makeDist runs `make dist` in the repository root into a fresh temp directory and returns that directory.
-func makeDist(t *testing.T, version string) string {
+// taskDist runs `task dist` in the repository root into a fresh temp directory and returns that directory.
+func taskDist(t *testing.T, version string) string {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("builds three binaries; skipped in -short mode")
 	}
-	if _, err := exec.LookPath("make"); err != nil {
-		t.Skip("make not on PATH")
+	if _, err := exec.LookPath("task"); err != nil {
+		t.Skip("task not on PATH")
 	}
 	dist := filepath.Join(t.TempDir(), "dist")
-	cmd := exec.Command("make", "-C", "../..", "dist", "VERSION="+version, "DIST="+dist)
+	cmd := exec.Command("task", "-d", "../..", "dist", "VERSION="+version, "DIST="+dist)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("make dist: %v\n%s", err, out)
+		t.Fatalf("task dist: %v\n%s", err, out)
 	}
 	return dist
 }
@@ -136,7 +136,7 @@ func readFile(t *testing.T, path string) []byte {
 
 func TestDistArtifacts(t *testing.T) {
 	const version = "v0.0.0-test"
-	dist := makeDist(t, version)
+	dist := taskDist(t, version)
 
 	archives := []string{
 		"butterfly-sn_" + version + "_linux_amd64.tar.gz",
@@ -217,8 +217,8 @@ func TestDistArtifacts(t *testing.T) {
 	}
 
 	// Reproducible: a second build gives identical checksums.
-	if again := string(readFile(t, filepath.Join(makeDist(t, version), "SHA256SUMS"))); again != sums {
-		t.Errorf("second make dist differs:\n%s\nvs\n%s", sums, again)
+	if again := string(readFile(t, filepath.Join(taskDist(t, version), "SHA256SUMS"))); again != sums {
+		t.Errorf("second task dist differs:\n%s\nvs\n%s", sums, again)
 	}
 }
 
@@ -268,7 +268,7 @@ func TestWindowsBinaryWithWine(t *testing.T) {
 		t.Skip("wine not on PATH")
 	}
 	const version = "v0.0.0-test"
-	dist := makeDist(t, version)
+	dist := taskDist(t, version)
 	exe := filepath.Join(dist, "windows-amd64", "butterfly-sn.exe")
 
 	prefix := t.TempDir()

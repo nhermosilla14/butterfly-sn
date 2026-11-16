@@ -1,4 +1,4 @@
-# Scratch image holding only the static release binary. Build with `make image`, which runs `make dist` first.
+# Scratch image holding only the static release binary. Build with `task image`, which runs `task dist` first.
 FROM scratch
 ARG TARGETARCH
 ARG VERSION=dev

@@ -1,14 +1,14 @@
 # Operations
 
 How the gateway is built, versioned, packaged and shipped: the version flag, the release binaries, the container
-image and the continuous-integration workflows. The Makefile is the single entry point for all of it.
+image and the continuous-integration workflows. The `Taskfile.yml` is the single entry point for all of it.
 
 ## Behaviours
 
 ### Version flag
 `butterfly-sn -version` prints `butterfly-sn <version>` followed by a newline and exits 0. It needs no
 configuration file and prints nothing else. The version comes from `git describe --tags --always --dirty` at build
-time, or `dev` for a plain `go build`, and can be set with `make ... VERSION=...`.
+time, or `dev` for a plain `go build`, and can be set with `task ... VERSION=...`.
 - Criteria:
   - `-version` prints exactly `butterfly-sn <version>` and exits 0 with no `-config`.
   - A binary built with the linker variable reports the stamped version; an unstamped build reports `dev`.
@@ -16,7 +16,7 @@ time, or `dev` for a plain `go build`, and can be set with `make ... VERSION=...
 - Tests: TestVersionFlag, TestMissingConfigStillUsageError
 
 ### Release binaries
-`make dist` builds static binaries for linux/amd64, linux/arm64 and windows/amd64 without cgo and packs each with
+`task dist` builds static binaries for linux/amd64, linux/arm64 and windows/amd64 without cgo and packs each with
 `LICENSE` and `config.example.yaml` into an archive named `butterfly-sn_<version>_<os>_<arch>` (`.tar.gz` for
 Linux, `.zip` for Windows), plus one `SHA256SUMS` file. Builds are reproducible.
 - Criteria:
@@ -30,10 +30,10 @@ Linux, `.zip` for Windows), plus one `SHA256SUMS` file. Builds are reproducible.
 - Tests: TestDistArtifacts, TestBuiltBinaryAnswersSearchgw, TestWindowsBinaryWithWine
 
 ### Container image
-`make image` builds, with the podman CLI only, a multi-architecture manifest `butterfly-sn:<version>` for
+`task image` builds, with the podman CLI only, a multi-architecture manifest `butterfly-sn:<version>` for
 linux/amd64 and linux/arm64 from `scratch`, assembled from the release binaries. The image holds only the static
 binary, runs as UID 65534, exposes UDP 5684 and reads its configuration from `/etc/butterfly-sn/config.yaml`,
-which the operator mounts. `make image-test` builds the host-architecture image and smoke-tests it; it needs
+which the operator mounts. `task image-test` builds the host-architecture image and smoke-tests it; it needs
 podman but no Docker.
 - Criteria:
   - The image runs as 65534:65534, exposes `5684/udp`, uses `/butterfly-sn` as entrypoint and
@@ -46,16 +46,18 @@ podman but no Docker.
 - Tests: TestImageMetadata, TestImageContainsOnlyBinary, TestImageVersionFlag, TestContainerAnswersSearchgwAndStopsCleanly
 
 ### Continuous integration and releases
-Two GitHub Actions workflows call only Makefile targets. `CI` runs `make test` and `make dist` on pushes to
+Two GitHub Actions workflows call only `Taskfile.yml` tasks, after installing task with a pinned
+`go install github.com/go-task/task/v3/cmd/task@v3.54.0`. `CI` runs `task test` and `task dist` on pushes to
 `develop` and `main` and on pull requests, and runs the branch-record merge gate on pull requests into `develop`.
-`Release` runs on tags matching `v*`: it runs the tests and `make dist`, then attaches the archives and
+`Release` runs on tags matching `v*`: it runs the tests and `task dist`, then attaches the archives and
 `SHA256SUMS` to a GitHub release, marking hyphenated tags as prereleases.
 - Criteria:
-  - Both workflow files are valid YAML and every `run:` step calls an existing Makefile target, except the single
-    `gh release create` step of the release workflow.
+  - Both workflow files are valid YAML and every `run:` step calls an existing Taskfile task, except the pinned
+    task install step and the single `gh release create` step of the release workflow.
+  - Every job that calls a task installs it first with a pinned `go-task` version.
   - Triggers, permissions and the jobs named above are present, and only first-party actions pinned to a major
     version are used.
-- Tests: TestWorkflowsUseOnlyMakeTargets, TestCIStructure, TestReleaseStructure, TestCheckerRejectsBadWorkflows
+- Tests: TestWorkflowsUseOnlyTaskTargets, TestCIStructure, TestReleaseStructure, TestCheckerRejectsBadWorkflows
 - Unverified: the workflows have never run on GitHub because no remote is configured; their first execution after the repository is pushed (2026-11-14)
 
 ## Not supported
@@ -66,5 +68,5 @@ Two GitHub Actions workflows call only Makefile targets. `CI` runs `make test` a
 - A Windows SEARCHGW check: under wine the Go UDP listener fails (`WSAIoctl` error 10045), so the Windows binary is
   verified for `-version` only and the network path on real Windows is unverified.
 - Configuration by environment variable, health endpoints and metrics.
-- `make image` leaves untagged per-platform images in podman's store; remove them with `podman image prune` if
+- `task image` leaves untagged per-platform images in podman's store; remove them with `podman image prune` if
   they are not wanted.

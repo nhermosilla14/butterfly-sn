@@ -20,8 +20,12 @@ jobs:
           cache-dependency-path: |
             go.sum
             butterfly-mqtt-client/go.sum
-      - run: make test
-      - run: make dist
+      - name: Install Task
+        run: |
+          go install github.com/go-task/task/v3/cmd/task@v3.54.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - run: task test
+      - run: task dist
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

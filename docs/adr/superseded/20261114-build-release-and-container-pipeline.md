@@ -1,6 +1,6 @@
 # Build, release and container pipeline
 
-- Status: Accepted
+- Status: Superseded by 20261116-taskfile-as-build-entry-point
 - Date: 2026-11-14
 - Deciders: Nicolás Hermosilla
 - Approved by: Nicolás Hermosilla

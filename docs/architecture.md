@@ -25,9 +25,9 @@ keepalive, broker-loss handling, will handling, sleep with buffered downlink and
 | `internal/mqttsn` | MQTT-SN packet codec, no I/O (CONNECT, CONNACK, REGISTER, REGACK, PUBLISH, PUBACK, SUBSCRIBE, SUBACK, UNSUBSCRIBE, UNSUBACK, PINGREQ, PINGRESP, DISCONNECT, will messages including updates and their responses, SEARCHGW, GWINFO, ADVERTISE) |
 | `internal/gateway` | UDP listener and router; one session goroutine, one broker reader goroutine and a normal-topic table per client |
 | `butterfly-mqtt-client/` | Standalone MQTT 3.1.1 client module (own `go.mod`, stdlib only, no gateway concepts), joined by a `replace` directive so it can move to its own repo |
-| `Makefile`, `Dockerfile` | Build and release: `make dist` cross-builds static binaries, archives and checksums; `make image` assembles the scratch image from them with podman |
-| `.github/workflows` | CI and release workflows; they call only Makefile targets |
-| `test/image`, `test/workflows` | Image smoke test (tag `image`) and the check that workflows match the Makefile |
+| `Taskfile.yml`, `Dockerfile` | Build and release: `task dist` cross-builds static binaries, archives and checksums; `task image` assembles the scratch image from them with podman |
+| `.github/workflows` | CI and release workflows; they install task and call only task targets |
+| `test/image`, `test/workflows` | Image smoke test (tag `image`) and the check that workflows match the Taskfile |
 | `test/e2e` | End-to-end tests: gateway in-process, real Mosquitto in a container (testcontainers-go, Docker), plain MQTT observer |
 
 ## Flow
